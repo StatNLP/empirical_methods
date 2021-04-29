@@ -1,0 +1,200 @@
+---
+title: 'Hyperparamter: Grid Serach from scratch'
+
+author: 
+  - Michael Hagmann^[hagmann@cl.uni-heidelberg.de]
+  - Stefan Riezler
+  
+date: '`r format(Sys.Date(), "%B %d, %Y")`'
+
+output:
+  bookdown::pdf_book: default
+
+urlcolor: blue
+
+header-includes:
+  - \usepackage{mathtools}
+  - \usepackage{amsmath}
+---
+
+```{r, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      cache.lazy = FALSE,
+                      dev = c("svglite", "pdf", "png"),
+                      dpi = 300,
+                      fig.path = 'figures/',
+                      fig.keep = "high")
+
+
+#added from: https://github.com/yihui/knitr-examples/blob/master/077-wrap-output.Rmd
+library(knitr)
+hook_output = knit_hooks$get('output')
+knit_hooks$set(output = function(x, options) {
+  # this hook is used only when the linewidth option is not NULL
+  if (!is.null(n <- options$linewidth)) {
+    x = knitr:::split_lines(x)
+    # any lines wider than n should be wrapped
+    if (any(nchar(x) > n)) x = strwrap(x, width = n)
+    x = paste(x, collapse = '\n')
+  }
+  hook_output(x, options)
+})
+```
+
+```{r, message=FALSE}
+library(tidyverse) # A collection of packages for data science. More about it on 
+                   # www.tidyverse.com
+library(magrittr)  # A package that provides pipe operators like %>%
+library(lme4)      # A package 
+library(glue)      # A package that provides interpolated string functions.
+library(latex2exp) # A package that converts latex to plotmath expressions.library(lmerTest)
+library(lmerTest)  # A package that improves inference for LMEM.
+library(emmeans)   # A package that allows to conduct post-hoc tests.
+library(optimx)    # A package that contains additional optimizer. 
+library(data.table)
+library(glue)
+library(mgcv)
+```
+
+
+```{r function: ICC_nested, echo=FALSE}
+ICC_nested <- function(model) {
+
+  nested_terms <-  
+    formula(model) %>%
+    as.character(.) %>%
+    str_extract_all(., "(?<=[|] ?)[[:word:]]+[/][[:word:]]+(?= ?[)])") %>%
+    unlist(.) %>%
+    na.omit(.) %>%
+    as.vector(.) %>%
+    str_trim(.)
+  
+  variances <- 
+    as_tibble(VarCorr(model)) %>%
+    select(effect    = grp,
+           variance  = vcov) 
+             
+
+  rpl_effect <- function(x, str) {
+  
+    x <- str_trim(x)
+    
+    nested_hyperPar <- 
+    strsplit(str, "/", fixed = TRUE)[[1]][1] %>%
+    str_trim(.) %>%
+    #add regx condition to prevent substring matching:
+    paste0(., "($|:)")  
+  
+    x[grepl(nested_hyperPar, x)] <- str  
+  
+    return(x)
+  }
+
+  variances$effect <-    
+    reduce(.x    = nested_terms,
+           .f    = rpl_effect,
+           .init = variances$effect,
+           .dir  = "forward")
+
+  variances %<>%
+    group_by(effect) %>%
+    summarize(variance = sum(variance, na.rm = TRUE)) %>%
+    ungroup() %>%
+    mutate(icc      = variance / sum(variance, na.rm = TRUE),
+           icc_perc = icc * 100) %>%
+    arrange(desc(icc))
+  
+  return(variances)
+}
+
+```
+
+
+
+```{r read data, echo = FALSE}
+grid_data <- 
+  readRDS("reliability_gridsearch_results.rds")
+```
+
+TASK: Predict SOFA Score for liver based on training data without circular features.
+
+LEARNER: The system consist of two components. The first component is a Feed Forward 
+Neural Network which is trained to output a real valued score (called raw prediction) based
+on 44 physiological status variables. This network is trained with a L2-loss function.
+The second component is an ordinal regression model which is used to derive threshold values
+to map the raw score to 0, 1, 2, 3 or 4. The output of this mapping i called the 
+predicted sofa score and forms the basis of all further evaluations.
+
+RESEARCH QUESTION: Determine a quantification of hyperparameter influence on 
+summative evaluation metrics like corpus BLEU, Accuracy etc. 
+
+
+PROCEDURE: We identified a set of hyperparameters we would like to study and 
+defined a range of relevant values for each of them. We then choose 3 to 6 values 
+that reasonable cover this range for each of the chosen hyperparameters and trained the
+learner under each possible combination.
+
+The chosen hyperparameter an values are:
+
+```{r show hyperparamters, echo=FALSE}
+summary(select(grid_data, -system, -accuracy))
+```
+
+
+We than evaluate the trained models on a test set (see circularity analysis for details) and 
+calculated the accuracy for each of them. The results are briefly summarized by: 
+
+```{r show accuracy, echo=FALSE}
+summary(select(grid_data, accuracy))
+```
+
+To get a first impression let us plot univariate summarizations (mean and sd) for 
+each hyperparameter:
+
+```{r liver_rel_model_fig1,  echo=FALSE, warning=FALSE, fig.height = 11.7, fig.width = 8.3, fig.align = "center"}
+data_plot <-
+  grid_data      %>%
+  select(-system) %>%
+  pivot_longer(cols = !accuracy, 
+               names_to = "parameter", 
+               values_to = "parameter_value",
+               values_transform = list(parameter_value = as.character)) %>%
+  group_by(parameter, parameter_value) %>%
+  summarize(mean_acc = mean(accuracy),
+            sd_acc   = sd(accuracy)) 
+
+ggplot(data = data_plot, 
+       aes(y = mean_acc, x = factor(as.numeric(parameter_value)))) +
+  theme_bw() + 
+  xlab("") +
+  ylab("mean accuracy") + 
+  facet_wrap(vars(parameter), ncol = 2, scales = "free_x") +
+  geom_point(size = .001) +
+  geom_pointrange(aes(ymin = mean_acc - sd_acc, 
+                      ymax = mean_acc + sd_acc))
+
+```
+
+Now we calculate a random effect model to decompose the variance:
+
+```{r estimate var component with lme4}
+mod_form <- 
+  #remove seed, so that it is identical with residual
+  glue("(1|{names(grid_data)[-c(1,2,9)]})") %>% 
+    glue_collapse(., sep = " + ") %>%
+    glue("accuracy ~ ", .)
+
+var_decomp <-   
+  lmer(as.formula(mod_form), 
+       data = grid_data)
+
+#model2 <- 
+#  update(var_decomp, ~ . + (1 | hidden_number:hidden_size_max))
+```
+
+And summarize the results:
+
+```{r, message=FALSE}
+ICC_nested(var_decomp)
+```
+

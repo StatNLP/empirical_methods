@@ -1,0 +1,317 @@
+---
+title: "Search for circular features: Liver SOFA Example"
+author: 
+  - Michael Hagmann ^[hagmann@cl.uni-heidelberg.de]
+  - Stefan Riezler
+  
+date: '`r format(Sys.Date(), "%B %d, %Y")`'
+
+output:
+  pdf_document:
+    latex_engine: xelatex
+  bookdown::pdf_book: default
+    
+urlcolor: blue
+---
+
+```{r, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      cache.lazy = FALSE,
+                      dev = c("svglite", "pdf", "png"),
+                      dpi = 300,
+                      fig.path = 'figures/',
+                      fig.keep = "high")
+
+#added from: https://github.com/yihui/knitr-examples/blob/master/077-wrap-output.Rmd
+library(knitr)
+hook_output = knit_hooks$get('output')
+knit_hooks$set(output = function(x, options) {
+  # this hook is used only when the linewidth option is not NULL
+  if (!is.null(n <- options$linewidth)) {
+    x = knitr:::split_lines(x)
+    # any lines wider than n should be wrapped
+    if (any(nchar(x) > n)) x = strwrap(x, width = n)
+    x = paste(x, collapse = '\n')
+  }
+  hook_output(x, options)
+})
+
+```
+
+
+
+
+```{r, include=FALSE}
+library(tidyverse) # A collection of packages for data science. More about it on 
+                   # www.tidyverse.com
+library(magrittr)  # A package that provides pipe operators like %>%
+library(mgcv)      # A package written by Simon Wood that implements his 
+                   # (spline based) GAM specification.
+library(glue)      # A package that provides interpolated string functions.
+```
+
+
+```{r function: powerSet, include=FALSE}
+#When you want to reproduce the examples, you have to run this code chunk in advance!!
+powerSet <- function(set) {
+  
+    apply(X      = rep(list(c(T,F)), length = length(set)) %>% expand.grid(.),
+          MARGIN = 1,
+          FUN    = function(...) set[...])
+}
+```
+
+
+
+
+```{r read data sets, include=FALSE}
+train_data <- readRDS("data/dataset-train_nostd.rds")
+```
+
+Train set size: `r nrow(train_data)` measurement points.
+
+
+
+
+\newpage
+## SEARCH
+```{r calc correlations,include=FALSE}
+method <- "pearson"
+
+corr_matrix <-
+  sapply(select(train_data, amv:horovitz), 
+         cor,
+         method = method,
+         y = train_data$target)
+```
+
+
+```{r feature list for search based on corr, include=FALSE}
+size_feature_list <- 5
+
+feature_list <- 
+  corr_matrix[order(abs(corr_matrix), decreasing=TRUE)][1:size_feature_list] %>%
+  names(.) %>% 
+  paste0("s(", .,")")
+```
+
+```{r liver_model_search, cache=TRUE, include=FALSE}
+fitted_models <-
+  #generate the power set of feature_list, and remove the void set 
+  powerSet(feature_list)[-(2^length(feature_list))] %>%
+  #build the symbolic model description  
+  sapply(., function(...) glue("target~{glue_collapse(..., sep='+')}")) %>%
+  #fit the models to data, and extract key statistics
+  tibble(formula_str = .,
+         models      = lapply(X = .,
+                              FUN  = function(m_str,...) gam(as.formula(m_str), ...),
+                              data = train_data),
+         data_fit    = round(sapply(models, function(m) summary(m)$dev.expl) * 100),
+         complexity  = sapply(models, function(...) attr(logLik(...), 'df'))) %>%
+  #Sort the models so that we can find models that replicate the data well.
+  #For this models data_fit should be approximately 100.
+  arrange(desc(data_fit), complexity)
+```
+
+
+### TOP TEN 
+```{r hit list, echo=FALSE}
+head(fitted_models[,-2], n = 10)
+```
+
+
+### (tuned) SELECTED MODEL
+```{r tuned circular candidate, echo=FALSE}
+selected_model <- gam(target ~ s(bili, k = 100), data=train_data)
+
+summary(selected_model)
+```
+
+```{r liver_circ_fig1, warning=FALSE, echo=FALSE , fig.height = 4.5, fig.width = 4.5, fig.align = "center"}
+jump_bili <- function(x) (x > 12) + (x > 6) + (x > 2) + (x > 1.2) + 0
+
+plot(selected_model, 
+     se    = FALSE, 
+     #rug   = TRUE, 
+     xlim  = c(0,15), 
+     ylim  = c(0,4),
+     main = "",
+     ylab  = "", 
+     xlab = "bilirubin",
+     shift = coef(selected_model)[1])
+rug(unique(train_data$bili))
+curve(jump_bili, from = 0, to = 15, n = 1001, add = TRUE, col = "blue", lty="dashed")
+abline(v = c(1.2, 2, 6, 12), col = "blue", lty="dotted")
+curve(jump_bili, from = 0, to = 15, n = 1001, add = TRUE, col = "blue", lty="dashed")
+abline(v = c(1.2, 2, 6, 12), col = "blue", lty="dotted")
+legend(legend = c("Theoretical", "Estimated"), 
+       col    = c("blue", "black"),
+       lty    = c("dashed", "solid"),
+       bty    = "o",
+       bg     = "white",
+       x      = "topleft")
+```
+
+
+
+
+
+
+\newpage
+## NULLIFICATION
+```{r train gam with all featurs, warning=FALSE, cache=TRUE, include=FALSE}
+gam_all <- 
+  gam(target ~ s(bili, k = 100) + s(asat) + s(quinr) + s(thrombo) + s(alat), 
+      data = train_data)
+```
+
+```{r train gam without bili, warning=FALSE, cache=TRUE, include=FALSE}
+gam_nobili <- 
+  gam(target ~  s(asat) + s(quinr) + s(thrombo) + s(alat), 
+      data = train_data)
+```
+
+
+### GAM with access to all features in list
+```{r, echo=FALSE}
+summary(gam_all )
+```
+
+
+\newpage 
+### GAM without access to bili
+```{r, echo=FALSE}
+summary(gam_nobili)
+```
+
+
+\newpage
+```{r liver_circ_fig2, echo=FALSE, warning=FALSE, fig.height = 11.7, fig.width = 8.3, fig.align = "center"}
+dev_nocirc   <- round(summary(gam_nobili)$dev.expl * 100)
+dev_withcirc <- round(summary(gam_all)$dev.expl * 100)
+
+par(mfrow = c(5,2),  mar=c(2,3,2,3), oma = c(1,1,1,1))
+ 
+   plot(x = 0:15, y = seq(0,4, length.out=16),
+     xlim   = c(0,15), 
+     ylim   = c(0,4),
+     main   = glue("GAM without Bilirubin (D\U00B2={dev_nocirc}%)"),
+     ylab   = "", 
+     xlab   = "",
+     type   = "n")
+  text(labels = "not included in GAM",
+       x      = mean(c(0,15)),
+       y      = mean(c(0,4)),
+       adj    = .5)
+  
+  plot(gam_all, 
+     se     = FALSE, 
+     #rug   = TRUE, 
+     xlim   = c(0,15), 
+     ylim   = c(0,4),
+     main   = glue("GAM with all Features (D\U00B2={dev_withcirc}%)"),
+     ylab   = "", 
+     xlab   = "",
+     select = 1,
+     shift  = coef(gam_all)[1])
+   rug(unique(train_data$bili))
+  mtext("bilirubin", side = 4, line = 1)
+  
+  
+  plot(gam_nobili, 
+       se     = FALSE, 
+       #rug    = TRUE, 
+       ylab   = "Feature Shape",
+       xlab   = "",
+       ylim   = c(-1,4), 
+       #xlim   = c(,), 
+       select = 1)
+    abline(h=0, lty = 3)
+    rug(unique(train_data$asat))
+  
+  plot(gam_all, 
+       se     = FALSE, 
+       #rug    = TRUE, 
+       ylab   = "",
+       xlab   = "",
+       ylim   = c(-1,4), 
+       #xlim   = c(,), 
+       select = 2)
+    abline(h=0, lty = 3)
+      rug(unique(train_data$asat))
+  mtext("asat", side = 4, line = 1)
+  
+  
+  plot(gam_nobili, 
+       se     = FALSE, 
+       #rug    = TRUE, 
+       ylab   = "",
+       xlab   = "",
+       ylim   = c(-1,4),
+       xlim   = c(0.8, 4),
+       select = 2)
+    abline(h=0, lty = 3)
+    rug(unique(train_data$quinr))
+  
+  plot(gam_all, 
+       se     = FALSE, 
+       #rug    = TRUE, 
+       ylab   = "",
+       xlab   = "",
+       ylim   = c(-1,4),
+       xlim   = c(0.8, 4),
+       select = 3)
+    abline(h=0, lty = 3)
+    rug(unique(train_data$quinr))
+  mtext("quinr", side = 4, line = 1)
+  
+ 
+  plot(gam_nobili, 
+       se     = FALSE, 
+       #rug    = TRUE, 
+       #ylab   = "", 
+       xlab   = "",
+       ylim   = c(-1,4), 
+       #xlim   = c(0, 7000), 
+       select = 3)
+    rug(unique(train_data$thrombo))
+    abline(h=0, lty = 3)
+  
+  plot(gam_all, 
+       se     = FALSE, 
+       #rug    = TRUE, 
+       ylab   = "", 
+       #xlab   = "",
+       ylim   = c(-1,4), 
+       #xlim   = c(0, 7000),
+       select = 4)
+    abline(h=0, lty = 3)
+    rug(unique(train_data$thrombo))
+  mtext("thrombo", side = 4, line = 1)
+  
+  
+  plot(gam_nobili, 
+       se     = FALSE, 
+       #rug    = TRUE, 
+       ylab   = "",
+       #xlab   = "",
+       ylim   = c(-1,4),
+       #xlim   = c(, ),
+       select = 4)
+    abline(h=0, lty = 3)
+    rug(unique(train_data$alat))
+  
+  plot(gam_all, 
+       se     = FALSE, 
+       #rug    = TRUE, 
+       ylab   = "",
+       xlab   = "",
+       ylim   = c(-1,4),
+       #xlim   = c(, ),
+       select = 5)
+    abline(h=0, lty = 3)
+    rug(unique(train_data$alat))
+  mtext("alat", side = 4, line = 1)
+par(mfrow = c(1,1), mar = c(5,4,4,2))
+```
+
