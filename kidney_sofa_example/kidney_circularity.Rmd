@@ -1,0 +1,433 @@
+---
+title: "Search for circular features: Kidney SOFA Example"
+author: 
+  - Michael Hagmann ^[hagmann@cl.uni-heidelberg.de]
+  - Stefan Riezler
+  
+date: '`r format(Sys.Date(), "%B %d, %Y")`'
+
+output:
+  pdf_document:
+    latex_engine: xelatex
+  bookdown::pdf_book: default
+    
+urlcolor: blue
+---
+
+```{r, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      cache.lazy = FALSE,
+                      dev = c("svglite", "pdf", "png"),
+                      dpi = 300,
+                      fig.path = 'figures/',
+                      fig.keep = "high")
+
+#added from: https://github.com/yihui/knitr-examples/blob/master/077-wrap-output.Rmd
+library(knitr)
+hook_output = knit_hooks$get('output')
+knit_hooks$set(output = function(x, options) {
+  # this hook is used only when the linewidth option is not NULL
+  if (!is.null(n <- options$linewidth)) {
+    x = knitr:::split_lines(x)
+    # any lines wider than n should be wrapped
+    if (any(nchar(x) > n)) x = strwrap(x, width = n)
+    x = paste(x, collapse = '\n')
+  }
+  hook_output(x, options)
+})
+
+```
+
+
+
+
+```{r, include=FALSE}
+library(tidyverse) # A collection of packages for data science. More about it on 
+                   # www.tidyverse.com
+library(magrittr)  # A package that provides pipe operators like %>%
+library(mgcv)      # A package written by Simon Wood that implements his 
+                   # (spline based) GAM specification.
+library(glue)      # A package that provides interpolated string functions.
+library(corrplot)
+library(cowplot)
+```
+
+
+```{r function: powerSet, include=FALSE}
+#When you want to reproduce the examples, you have to run this code chunk in advance!!
+powerSet <- function(set) {
+  
+    apply(X      = rep(list(c(T,F)), length = length(set)) %>% expand.grid(.),
+          MARGIN = 1,
+          FUN    = function(...) set[...])
+}
+```
+
+
+```{r read data sets, include=FALSE}
+train_data <- readRDS("data/dataset-train_nostd.rds")
+```
+
+Train set size: `r nrow(train_data)` measurement points.
+
+
+
+\newpage
+## SEARCH
+```{r calc correlations,include=FALSE}
+method <- "pearson"
+
+corr_matrix <-
+  sapply(select(train_data, amv:horovitz), 
+         cor,
+         method = method,
+         y = train_data$target)
+```
+
+
+```{r feature list for search based on corr, include=FALSE}
+size_feature_list <- 6
+
+selected_features <- 
+  corr_matrix[order(abs(corr_matrix), decreasing=TRUE)][1:size_feature_list] %>%
+  names(.) 
+
+feature_list <- 
+  selected_features %>%
+  paste0("s(", .,")")
+```
+
+
+### Target - Feature Correlation
+```{r kidney_circ_fig1, fig.height = 3.9, fig.width = 4.1, fig.align = "center"}
+col_scale <- colorRampPalette(c("red3", "white", "blue3"))
+
+corrplot(corr = cor(train_data[c("target", selected_features)]), 
+         method = "ellipse",
+         type = "upper",
+         col = col_scale(100),
+         diag = FALSE)
+```
+
+
+
+```{r liver_model_search, cache=TRUE, include=FALSE}
+fitted_models <-
+  #generate the power set of feature_list, and remove the void set 
+  powerSet(feature_list)[-(2^length(feature_list))] %>%
+  #build the symbolic model description  
+  sapply(., function(...) glue("target~{glue_collapse(..., sep='+')}")) %>%
+  #fit the models to data, and extract key statistics
+  tibble(formula_str = .,
+         models      = lapply(X = .,
+                              FUN  = function(m_str,...) gam(as.formula(m_str), ...),
+                              data = train_data),
+         data_fit    = round(sapply(models, function(m) summary(m)$dev.expl) * 100),
+         complexity  = sapply(models, function(...) attr(logLik(...), 'df'))) %>%
+  #Sort the models so that we can find models that replicate the data well.
+  #For this models data_fit should be approximately 100.
+  arrange(desc(data_fit), complexity)
+```
+
+### TOP TEN 
+```{r hit list, echo=FALSE}
+head(fitted_models[,-2], n = 10)
+```
+
+
+### (tuned) SELECTED MODEL
+```{r tuned circular candidate, include=FALSE, cache=TRUE}
+selected_model <- gam(target  ~ s(crea, k = 150) + s(urine24, k = 125), data = train_data)
+
+summary(selected_model)
+```
+
+```{r, include = FALSE, results="hide"}
+z <- plot(selected_model, select = 1)
+shift_crea   <- abs(mean(z[[1]]$fit[between(z[[1]]$x, 0, 1)]))
+shift_urine24 <- coef(selected_model)[1] - shift_crea
+```
+
+\newpage
+```{r kidney_circ_fig2, echo = FALSE, warning= FALSE, fig.height = 3.9, fig.width = 8.3, fig.align = "center"}
+jump_urine <- function(x) (x < 200) + (x < 500) * 3 + 0
+jump_crea  <- function(x) (x > 5) + (x > 3.5) + (x > 2) + (x > 1.2) + 0
+
+par(mfrow = c(1,2), mar=c(4,3,2,1), oma = c(1,1,1,1))
+plot(selected_model, 
+     se     = FALSE, 
+     scale  = 0, 
+     rug    = FALSE, 
+     xlim   = c(0,1000), 
+     ylim   = c(0, 4), 
+     select = 2, 
+     ylab   = "Smoother Value", 
+     xlab   = "urine output",
+     shift  = shift_urine24)
+curve(jump_urine, 
+      from = 0, 
+      to   = 1000, 
+      n    = 1001, 
+      add  = TRUE, 
+      col  = "blue", 
+      lty  = "dashed")
+abline(v = c(200, 500), col = "blue", lty="dotted")
+legend(legend = c("Theoretical", "Estimated"), 
+       col    = c("blue", "black"),
+       lty    = c("dashed", "solid"),
+       bty    = "o",
+       bg     = "white",
+       x      = "topright")
+rug(unique(train_data$urine24))
+
+plot(selected_model, 
+     se     = FALSE, 
+     scale  = 0, 
+     rug    = FALSE, 
+     xlim   = c(.15, 5.2), 
+     ylim   = c(0, 4), 
+     select = 1, 
+     ylab   = "",
+     xlab   = "creatinine", 
+     shift  = shift_crea)
+curve(jump_crea, 
+      from = 0.15, 
+      to   = 5.5, 
+      n    = 1001, 
+      add  = TRUE, 
+      col  = "blue", 
+      lty  = "dashed")
+abline(v = c(1.2, 2, 3.5, 5), col = "blue", lty="dotted")
+legend(legend = c("Theoretical", "Estimated"), 
+       col    = c("blue", "black"),
+       lty    = c("dashed", "solid"),
+       bty    = "o",
+       bg     = "white",
+       x      = "topleft")
+rug(unique(train_data$crea))
+par(mfrow = c(1,1), mar = c(5, 4, 4, 2))
+```
+
+\newpage
+### Circular Feature Correlation
+```{r kidney_circ_fig3, echo = FALSE, message=FALSE, warning=FALSE, fig.height = 3.9, fig.width = 4.1, fig.align = "center"}
+#remove very sparsely populated areas
+ggplot(train_data %>% filter(between(urine24, 0, 1000), between(crea, 0.15, 5.5)), 
+       aes(x=urine24, y=crea)) +
+  theme_minimal_grid(font_size = 12) + 
+  geom_density_2d_filled(alpha = 0.5) +
+  geom_density_2d(size = 0.25, colour = "black") +
+  geom_hline(yintercept = 1.2, colour = "red") + 
+  geom_vline(xintercept = c(500, 200), colour = "red", linetype = c("solid", "dashed")) + 
+  theme(legend.position='none') +
+  labs(title = "",
+       x     = "urine output",
+       y     = "creatinine") +
+  scale_y_continuous(breaks = c(0.15, 1.2, 5.5)) +
+  scale_x_continuous(breaks = c(0, 200, 500, 1000))
+```
+
+
+
+\newpage
+## NULLIFICATION
+```{r, include = FALSE, cache=TRUE}
+gam_nocirc <- 
+  gam(target ~ s(artph) + s(bun) + s(temp) + s(lactate), 
+      data = train_data)
+
+gam_all <- 
+  gam(target~ s(urine24, k = 150) + s(crea, k = 125) + s(artph) + s(bun) + s(temp) + s(lactate), 
+      data = train_data)
+```
+
+
+```{r kidney_circ_fig4, echo=FALSE, warning=FALSE, fig.height = 11.7, fig.width = 8.3, fig.align = "center"}
+dev_nocirc   <- floor(summary(gam_nocirc)$dev.expl * 100)
+dev_withcirc <- floor(summary(gam_all)$dev.expl * 100)
+
+par(mfrow = c(6,2),  mar=c(2,3,2,3), oma = c(1,1,1,1))
+#first row: urine output
+  plot(x = 0:1000, y = seq(0,4, length.out=1001),
+       #rug    = TRUE, 
+       xlim   = c(0,1000), 
+       ylim   = c(0, 4), 
+       main = glue("GAM without Circular Features (D\u00B2={dev_nocirc}%)"),
+       ylab   = "", 
+       xlab   = "",
+       type  = "n")
+  text(labels = "not included in GAM",
+       x      = mean(c(0,1000)),
+       y      = mean(c(0,4)),
+       adj    = .5)
+
+  plot(gam_all, 
+       se     = FALSE, 
+       scale  = 0, 
+       #rug    = TRUE, 
+       xlim   = c(0,1000), 
+       ylim   = c(0, 4), 
+       select = 1,
+       main = glue("GAM with Circular Features (D\u00B2={dev_withcirc}%)"),
+       ylab   = "", 
+       xlab   = "",
+       shift  = shift_urine24)
+    mtext("urine output", side = 4, line = 1)
+  rug(unique(train_data$urine24))
+
+#second row: creatinine
+  plot(x = seq(.15, 5.2, by = .01), y = seq(0, 4, length.out=506),
+       xlim   = c(.15, 5.2), 
+       ylim   = c(0, 4), 
+       ylab   = "",
+       xlab   = "", 
+       type   = "n")
+  text(labels = "not included in GAM",
+       x      = mean(c(0,5.2)),
+       y      = mean(c(0,4)),
+       adj    = .5)
+  
+  plot(gam_all, 
+       se     = FALSE, 
+       scale  = 0, 
+       #rug    = TRUE, 
+       xlim   = c(0.15,5.2), 
+       ylim   = c(0, 4), 
+       select = 2, 
+       ylab   = "",
+       xlab   = "", 
+       shift  = shift_crea)
+  mtext("creatinine", side = 4, line = 1)
+  rug(unique(train_data$crea))
+  
+# third row: artph
+  plot(gam_nocirc, 
+       se     = FALSE, 
+       #rug    = TRUE, 
+       ylab   = "", 
+       xlab   = "", 
+       ylim   = c(-1,4), 
+       xlim   = c(7.1, 7.6), 
+       select = 1)
+    abline(h=0, lty = 3)
+    rug(unique(train_data$artph))
+     
+  plot(gam_all,
+       se     = FALSE, 
+       #rug    = TRUE, 
+       ylab   = "", 
+       xlab   = "", 
+       ylim   = c(-1,4),
+       xlim   = c(7.1, 7.6),
+       select = 3)
+    abline(h=0, lty = 3)
+    rug(unique(train_data$artph))
+  mtext("art. pH", side = 4, line = 1)
+
+# fourth row: bun
+  plot(gam_nocirc, 
+       se     = FALSE,
+       #rug    = TRUE,
+       ylab   = "",
+       xlab   = "",
+       ylim   = c(-1,4),
+       xlim   = c(0, 200),
+       select = 2)
+    abline(h=0, lty = 3)
+    rug(unique(train_data$bun))
+    
+  plot(gam_all,
+       se     = FALSE,
+       #rug    = TRUE,
+       ylab   = "",
+       xlab   = "b",
+       ylim   = c(-1,4),
+       xlim   = c(0, 200),
+       select = 4)
+    abline(h=0, lty = 3)
+    rug(unique(train_data$bun))
+  mtext("bun", side = 4, line = 1)
+
+#fith row: temp
+  plot(gam_nocirc,
+       se     = FALSE,
+       #rug    = TRUE,
+       ylab   = "",
+       xlab   = "",
+       ylim   = c(-1,4),
+       xlim   = c(34, 40),
+       select = 3)
+    abline(h = 0, lty = 3)
+    rug(unique(train_data$temp))
+    
+  plot(gam_all,
+       se     = FALSE,
+       #rug    = TRUE,
+       ylab   = "",
+       xlab   = "",
+       ylim   = c(-1,4),
+       xlim   = c(34, 40),
+       select = 5)
+    abline(h = 0, lty = 3)
+    rug(unique(train_data$temp))
+  mtext("temperature", side = 4, line = 1)
+
+#sixth row: lactate 
+  plot(gam_nocirc,
+       se     = FALSE,
+       ylab   = "",
+       xlab   = "",
+       ylim   = c(-1,4),
+       xlim   = c(0, 15),
+       select = 4)
+    abline(h=0, lty = 3)
+    rug(unique(train_data$lactate))
+  plot(gam_all,
+       se     = FALSE,
+       ylab   = "",
+       xlab   = "",
+       ylim   = c(-1,4),
+       xlim   = c(0, 15),
+       select = 6)
+    abline(h=0, lty = 3)
+    rug(unique(train_data$lactate))
+  mtext("lactate", side = 4, line = 1)
+par(mfrow = c(1,1), mar = c(5,4,4,2))
+```
+
+
+\newpage
+## 3D Plots (to do)
+
+```{r function: SOFA kidney score, include=FALSE, eval = FALSE}
+kidney_sofa <- function(crea, urine24) {
+  
+  crea_score    <- (crea >= 1.2) + (crea >= 2) + (crea >= 3.5) + (crea > 5)
+  urine24_score <- (urine24 < 200) + (urine24 < 500) * 3 
+  
+  return(pmax(crea_score, urine24_score))
+}
+
+```
+
+
+```{r function: return grid values for fitted gam model, include = FALSE, eval = FALSE}
+newdata <- 
+  crossing(crea    = seq(0, 5.5, length.out = 1000),
+           urine24 = seq(0, 1000, length.out = 1000))
+
+pred_gam  <- predict(selected_model, newdata = newdata, se=FALSE)
+theo_sofa <- kidney_sofa(crea = newdata$crea, urine24 = newdata$urine24)  
+```
+
+
+```{r, include = FALSE, eval=FALSE}
+selected_model_2dim <- gam(target ~ s(crea, urine24, k=600), data=train_data)
+```
+
+
+```{r try to build 3d surface, include = FALSE, eval=FALSE}
+library(plot3D)
+
+surf3D()
+```
