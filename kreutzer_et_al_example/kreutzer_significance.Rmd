@@ -1,0 +1,604 @@
+---
+title: 'Using LMEMs to Analyse Model Performance Beyond Mean Measures'
+author: 
+  - Michael Hagmann^[hagmann@cl.uni-heidelberg.de]
+  - Stefan Riezler
+  
+date: '`r format(Sys.Date(), "%B %d, %Y")`'
+
+output:
+  bookdown::pdf_book: default
+
+urlcolor: blue
+
+header-includes:
+  - \usepackage{mathtools}
+  - \usepackage{amsmath}
+---
+
+```{r, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      cache.lazy = FALSE,
+                      dev = c("svglite", "pdf", "png"),
+                      dpi = 300,
+                      fig.path = 'figures/',
+                      fig.keep = "high")
+
+
+#added from: https://github.com/yihui/knitr-examples/blob/master/077-wrap-output.Rmd
+library(knitr)
+hook_output = knit_hooks$get('output')
+knit_hooks$set(output = function(x, options) {
+  # this hook is used only when the linewidth option is not NULL
+  if (!is.null(n <- options$linewidth)) {
+    x = knitr:::split_lines(x)
+    # any lines wider than n should be wrapped
+    if (any(nchar(x) > n)) x = strwrap(x, width = n)
+    x = paste(x, collapse = '\n')
+  }
+  hook_output(x, options)
+})
+```
+
+```{r, message=FALSE, include=FALSE}
+library(tidyverse) # A collection of packages for data science. More about it on 
+                   # www.tidyverse.com
+library(magrittr)  # A package that provides pipe operators like %>%
+library(lme4)      # A package 
+library(glue)      # A package that provides interpolated string functions.
+library(latex2exp) # A package that converts latex to plotmath expressions.library(lmerTest)
+library(lmerTest)  # A package that improves inference for LMEM.
+library(emmeans)   # A package that allows to conduct post-hoc tests.
+library(parameters)   
+```
+
+# Introduction
+
+In today's lecture we are turning to the final step in the train-dev-test paradigm
+of machine learning where a finally trained (fitted) model is evaluated on a 
+holdout data set (called the test data (set)) in order to estimate 
+out-of-sample performance measures.
+
+In NLP this post training analysis usually reduces to the calculation of mean
+task specific performance measure(s) for the samples of the test data and the 
+comparison of this number(s) to either state-of-the-art results or base-line 
+model estimates. In it's crudest form such an analysis is just descriptive and 
+allows only to draw conclusions that are valid for this specific sample. This 
+limitation in the scope of the conclusions drawn from such an analysis is due to 
+the fact that the hold out set is just a random sample from the population of 
+applicable cases an thus the calculated model performance metrics 
+are--like any other statistics--random variables. In order to draw valid 
+conclusions based on these metrics about model performance in the population one
+has to employ inference^[Note that the term **inference** in statistics has a 
+different meaning than in machine learning. In machine learning inference means
+the application of a trained model on an input instance in order to predict an
+associated output (label, translation etc.). In statistics such a model usage is 
+called prediction, and inference refers to the process of deducing properties of 
+the probability measure which serves as a model of the data generating process.] 
+statistical methods.
+
+Moreover such an analysis is rather basic and does not allow us to make a 
+differentiated statement about the fitted model's performance.
+Interesting question that one would like to ask are: "Does model performance 
+depend on certain input characteristics?", "Is the improvement over the baseline
+model uniform?" or "Which hyperparameter has the strongest effect on 
+out-of-sample performance?". 
+
+To facilitate an analysis which allows to answer questions like the aforementioned in 
+a way that allows to draw conclusions beyond the actual hold out 
+sample we are going to employ linear mixed effects models (LMEM). LMEMs are a 
+flexible well studied class of statistical models that allow us to investigate a wide 
+range of questions about a fitted model for broad range of experimental protocols. 
+The inference in LMEMs is largely based on asymptotic maximum likelihood theory and there
+exists a large body of diagnostic techniques to asses the validty of a LMEM based model.
+
+As this lecture is focused on the application of LMEMs to analyze evaluation 
+experiments and not on their theory we choose to present this practice by showing
+a prototypical example. As in our last lab session we illustrate the concepts and 
+methods by reanalyzing the evaluation experiment of 
+[Kreutzer et al.](https://arxiv.org/pdf/2004.11222.pdf) 
+(follow the link to the paper).
+
+In this study the researchers wanted to improve the performance of a 
+pretrained machine translation system by incorporating human translation quality 
+judgments in an reinforcement learning mechanism. They investigated two modes of 
+correction. The first mode is called "Marking". In this mode the annotators 
+simple mark words that are wrong. The feedback is incorporated in the objective 
+function in such a way that the objective is maximized when the probability of
+the correct (non-marked) tokens of the translated sequence is increased and/or 
+decreased for the incorrect (marked) tokens.
+The second mode is called "Post Edit". In this mode the annotators corrected the
+translations. The corrected translation is then used as a new gold standard 
+translation and the system is trained on these new gold standards. 
+The quality of machine translated sentence was obtained by calculating TER, BLEU
+and METEOR scores relative to the original gold standard translation. To avoid
+redundancy we limit our show case to TER evaluation.
+
+The obvious question is "What feedback improves the baseline system the most?".
+In order to answer this questions Kreutzer et al. applied the baseline and the 
+models trained on marking and post edit feedback on all sentences of the hold 
+out set.   
+
+
+# Marking or Post Edit? What Feedback Method Works Better?
+
+Let us start by importing the evaluation data for all three (baseline, 
+post edit and marking improved) models and inspect it.
+
+```{r read data, message=FALSE}
+#this data set contains replicates for different seeds 
+data_ter <- 
+  readRDS("data/data_ter.rds")
+
+summary(data_ter)
+```
+
+We see that the data set contains `r ncol(data_ter)` variables. The most 
+important for our analysis will be "ter" which stores the TER value of the system
+translation in comparison to the gold standard translation  and "system" 
+which holds which system (baseline, marking, post edit) was used to generate 
+the translation. The variable "sentence_id" provides a  
+source sentence identifier  and the variable "src_length" the length of the source sentence (measured by number of words). The training for all non-baseline models was 
+replicated three times (with different random seeds). 
+
+
+## A traditional way of analyzing system performance
+
+A conventional analysis starts by averaging the performance metric over all 
+replicates:
+
+```{r avaerage over replicates (seed)}
+#for a traditional analysis one has to average over replicates
+data_ter_mean <- 
+  data_ter %>%
+  select(-replication) %>%
+  group_by(across(!ter)) %>%
+  summarize(ter = mean(ter))
+```
+
+It is usually a good advice to start an analysis by descriptively and 
+visually exploring the research question. We are interested in TER scores 
+obtained for the different systems. So we plot them: 
+
+```{r kreutzer_sig_fig1, echo=FALSE, fig.height = 3.9, fig.width = 4.1, fig.align = "center"}
+ggplot(data = data_ter_mean) +
+  theme_bw() +
+  theme(legend.position = "none") +
+  xlab("") +
+  ylab("TER Score") +
+  geom_boxplot(aes(x = system, y = ter, fill = system), alpha = .3)
+```
+
+This kind of plot is called a **boxplot**. The horizontal line in the middle of
+the box marks the median value of the data points in the specific group. The 
+box indicates the range where the middle 50% of the data points are located. The
+vertical lines are called whiskers. There are several ways to calculate the 
+length of the whiskers. But irrespectivly of the exact definition, the whiskers 
+serve the purpose to identify observations with unusually large or small values in
+the data set (so called **outliers**) which are represented by point-like symbols
+below or above the whisker. 
+
+For our data we can see that the principle shape of the box plot is rather 
+similar for the three systems but the boxplots for "Marking" and "PostEdit" are 
+located slightly below the "Baseline" boxplot. This means that on average both 
+feedback methods have slightly improved translation quality. This can be also 
+seen when we calculate the group averages:
+
+```{r summarize mean system performance, message=FALSE}
+data_ter_mean %>%
+  group_by(system) %>%
+  summarise(mean_ter = mean(ter)) %>%
+  mutate(baseline_difference = mean_ter - mean_ter[1])
+```
+
+But are these observed differences convincing enough to provide evidence that the
+improvement holds in the population?   
+
+The most simple model we can formulate is a plain linear regression model that 
+explains the TER score by system type ("feedback")
+
+```{r conduct model based ANOVA}
+model_lm <- 
+  lm(ter ~ system, data = data_ter_mean)
+
+summary(model_lm)
+```
+
+Before we proceed with the analysis let us spend a minute on the details of this 
+model. The aspect that we are going to stress is the way in  which the categorical 
+covariate "feedback" is incorporated in the model. When we look at the estimated 
+coefficients column in the summary output for model_lm, we see that the estimated
+intercept numerically matches the mean TER value of the baseline model. Further,
+we see that the estimate for "feedbackMarking" is numerically equivalent to the 
+difference between the mean TER scores of the marking and the baseline model. The
+equivalent fact holds true for the estimated "feedbackPostEdit" coefficient.
+
+This observation is no coincidence. It results from the way that "feedback" is 
+represented in the model. We will take a look at the (reduced) design matrix of 
+the model to see how categorical variables are recoded and enter the model via 
+so called **dummy variables**^[Dummy variables are not the only way to recode and 
+incorporate categorical variables in a linear regression model.] 
+
+```{r present model matrix to show dummy coding}
+model.matrix(model_lm) %>% unique()
+```
+
+We see that the three leveled categorical variable "feedback" has been broken
+in three variables. One is the intercept^[The intercept corresponds to the bias 
+of a neuron in neural networks. You will hardly find a regression model in 
+statistics without an intercept. The intercept may seem unimportant at a first 
+glance but it is rather important for the statistical properties of the model
+estimates.] ((Intercept)) which is 1 for all cases and the others are 0/1
+variables which are 1 whenever the system was trained via markings (systemMarking) 
+or post edits (systemPostEdit). Let us have a look at a more formal representation^[
+We are just looking at the deterministic part of the model.] of this
+model. To figure out the meaning of the weights associated with these variables,
+we will look at the expected values that the model implies:
+
+$$ \mathbb{E}  \left[ \text{TER} | \text{System} \right] = 
+     \beta_0 + 
+     \beta_{\text{marking}}  \cdot \mathbb{I}_{ \{ \text{marking}  \} } \left( \text{System} \right) +
+     \beta_{\text{postEdit}} \cdot \mathbb{I}_{ \{ \text{postEdit} \} } \left( \text{System} \right) $$
+
+where $\mathbb{I}_{ \{ \text{condition}  \} } \left( \text{variable} \right)$ is 
+an indicator function that returns one if variable meets the condition and zero
+else. $\mathbb{E}  \left[ \text{TER} | \text{System} = s \right]$ denotes the 
+expected value of TER for system $s$. Let $\text{System} = \text{baseline}$ than
+
+$$\mathbb{E} \left[ \text{TER} | \text{baseline} \right] = \beta_0.$$
+which means that $\beta_0$ (the intercept of the model) is the expected TER 
+value of the baseline model. Thus the estimated intercept is an estimator for 
+the expected TER value of the baseline system---like the mean of the observed 
+TER scores. Indeed, if you do the math you will see, that the Maximum likelihood estimator coincides
+with the mean. 
+Now that we know how to interpret the intercept let us move forward and consider
+the case $\text{System} = \text{Marking}$. The expected TER value for marking is
+
+$$\mathbb{E} \left[ \text{TER} | \text{marking} \right] = \beta_0 + \beta_{marking}.$$
+Let us rearrange this equality and plug in the result for $\beta_0$ to get a clear 
+interpretation for $\beta_{marking}$. With that said:
+
+$$\beta_{marking} = 
+    \mathbb{E} \left[ \text{TER} | \text{marking} \right] - 
+    \beta_0 = 
+      \mathbb{E} \left[ \text{TER} | \text{marking} \right] - 
+      \mathbb{E} \left[ \text{TER} | \text{baseline} \right].$$
+
+Hence $\beta_{marking}$ represents the difference between the expected values of
+the marking and the baseline system. The estimated $\hat{\beta}_{marking}$ 
+therefor is the differences between the empirical means of both systems. Like 
+we have seen in our initial observation.An analogous result can be obtained for $\beta_{postEdit}$.
+
+Let us hold for a minute and summarize what we have elaborated before we proceed
+to model based inference. We have seen that the coefficients (weights) associated
+with the recoded categorical variable have a clear meaning--they are estimates
+for group means or their differences. Indeed, some of them
+provide a direct measure for differences of interest--think of $\beta_{marking}$
+and $\beta_{postEdit}$. Both coefficients measure the mean TER difference 
+between the respective system and the baseline system. But we can also combine 
+these coefficients to test other hypotheses like the difference between the 
+feedback trained systems. Techniques that facilitate this are summarized under 
+the umbrella of **contrast estimation**^[A contrast is a linear combination of 
+estimated coefficients whose weights add up to zero. Thus allowing comparison 
+of different treatments.] which we will see and use later. But linear models and linear 
+mixed effect models are not only useful for estimating group means and differences--something that we could do more easily by calculating group means. 
+The real benefit of this models is the fact that through asymptotic maximum likelihood theory they also 
+provide an asymptotic distribution for the (vector) of estimates and thus allow 
+us to conduct statistical inference based on them--something that we could not 
+have done so easily otherwise. 
+
+How do we conduct model based inference? First we test if the observed 
+differences provide sufficient evidence to reject the hypothesis that all systems 
+perform equal--this is often called the global hypothesis because when we reject 
+it, we don't know which systems perform differently. We can do this by 
+conducting a likelihood ratio test (LRT) between
+models with and without the covariate "system". Fortunately  R offers a 
+function called **anova** so we don't have to fit both models and calculate the 
+test by our selves. The principle argument(s) for "anova" are fitted model objects.
+If you provide just one model object then "anova" will calculate all the models 
+that can be obtained by removing just one model term. If you provide more than 
+one model "anova" will conduct test among those models. In any case the result of 
+"anova" is a so called analysis of variance table^[The name has historical reasons,
+because such a format of result presentation was used for the first time in 
+analysis of variance (ANOVA).] that summarizes all the conducted tests. The most
+important information in this table is the so called **p-value**. The p-value is
+the probability of observing the actual or a more extreme value of the test 
+statistic under the assumption of the null hypothesis. In our example the null 
+hypothesis states that all models perform equal and the test statistic measures 
+the deviation of our actual data from this assumption. A very low p-value 
+indicates that it was very unlikely (but not impossible!) to make our 
+observation. Thus a low p-value is regarded as evidence against the null 
+hypothesis--because the data seems to incompatible with it^[Please note, that 
+the p-value doesn't measure the correctness of the null hypothesis or tells 
+something else about the null hypothesis. This is a *wrong but often made claim* 
+in the literature and in blogs or other sources of rumor on the internet.]--and 
+we decide to reject it when the p-value is below a predefined level
+$\alpha \in \left(0,1 \right)$. As said earlier even extreme events are not 
+impossible under the null hypothesis so $\alpha$ is the probability to 
+incorrectly reject the null hypothesis given it is true. The chosen value for 
+$\alpha$ is the tolerated probability to incorrectly reject the null hypothesis 
+(a so called Type I error). Indeed it is the most critical property of a 
+statistical test to control this probability at the nominal level. The typical 
+level in research for $\alpha$ is $.05$. But don't be confused by the 
+terminology statistically significance doesn't imply practical significant or 
+relevance. Thus, we highly recommend to also interpret the size of the effect in
+terms of it's implication for practice after a significant significance test. 
+
+That said, let us run the test for our model:
+
+```{r conduct significance test}
+model_parameters(anova(model_lm, test = "Chisq"))
+```
+
+Unfortunately we see, that the p-value is $.517$ and thus much larger than 
+$\alpha = .05$. So we have to conclude, that our data doesn't provide enough 
+evidence to assume that the systems perform differently in the population. A
+disappointing result because it means that the effort of Kreutzer et al. were 
+fruitless. 
+
+
+#A smarter way to model and analyze the evaluation data
+
+But actually our model didn't reflect the design of the evaluation experiment 
+correctly. Let us recall how the data was collected. The 
+authors evaluated the three systems on the *same sentence* for the non baseline
+models the training ans evaluation was replicated three times (for different 
+random seeds). Thus each sentence was translated seven times in total. The 
+model based on the traditinal approch doesn't reflect this fact instead it models
+the data like each systems were evaluated once on disjoint sets of sentences. 
+Usually a single measure design like the latter is less powerful to detect 
+experimental effects than a design that uses multiple measures from the same 
+experimental unit. 
+To leverage the design effect, we need to adjust our model. To do so, we 
+formulate a linear mixed effect model. On the fixed effect side this model is 
+the same as the previous one. The only difference is that now we add a 
+**random intercept** term for each sentence^[This could only be done, because we have multiple observations of each  sentence in our data. If this isn't the case, such a model 
+could be--if each sentence was measured only once-- not be estimable.]. 
+This modeling choice introduces a component in the model that accounts for the 
+clustered measurements and thereby reduces the amount of unaccounted variance 
+which is measured by the residual variance. The residual variance plays an important 
+role in model based statistical inference. You can think of the residual error 
+as "noise" that masks the signal (measured performance differences). A reduction
+of this noise increases the power of our tests to detect significant differences. 
+
+```{r model data via LMEM to account for repeated measurements on the same sentence}
+model_lmm <- 
+  lmer(ter ~ system + (1 | sentence_id), data = data_ter)
+
+summary(model_lmm)
+```
+
+When we look at the output we see that the estimates for the fixed effects are 
+numerically identical to the one obtained via the previous model. But what 
+changed drastically is the residual standard error. In the previous model
+the estimated standard error (which summarized the amount of variation
+that could not be attribute to system differences) was $0.2576$ (see the model summary).
+Now this error is only $0.003487$! We can see that a large fraction ($.25325$) 
+of the previously unaccounted error is now attributed to (unspecific) sentence 
+differences. To see the impact of this reduction on the p-value we call the 
+"anova" function again to test the global hypothesis:
+
+```{r LMEM omnibus test}
+anova(model_lmm, lmer.df = "asymptotic", test= "Chisq")
+```
+
+We see that this minor modification of our analytical model in order to reflect 
+the data collection process more accurately had a huge impact on the obtained 
+p-value. For former model the p-value was  $.517$  now it is $<.0001$ and thus 
+significant.
+
+Now that we can reject the global hypothesis that the systems perform equally in
+the population we need to figure out which systems differ. For this purpose we 
+conduct so called **post-hoc tests**. In principle these test use the estimates 
+obtained from a fitted model and construct a set of contrasts which are tested 
+simultaneously. To control $\alpha$ at a specified level post-hoc tests usually 
+apply a so called **multiple testing**  adjustment procedure. 
+We use the **emmeans** package and function to conduct pairwise
+^[This means that we test every possible pair of means.] comparisons.
+
+The basic parameters of emmeans are object (to specify the fitted model) and 
+specs which implements a formula language to specify the desired contrasts. 
+
+```{r reconstruct group means and differences plus test}
+group_means <- 
+  emmeans(object  = model_lmm, 
+          specs   = pairwise ~ system, 
+          lmer.df = "asymptotic")
+
+group_means
+```
+
+The output of emmeans consists of two sections^[We can access the different 
+section separately by using the $ operator.]. The first section reports
+the estimated group means for the three systems. The second section reports
+the result for the requested contrasts. In our case the three pairwise 
+comparisons. We see that both feedback trained models improve the baseline model
+by approximately $.01$ TER points (both $\text{p} < .0001$) but we found no 
+evidence that either of them performed better than the other ($\text{p} = .1625$).
+
+This example illustrates a key message. Namely, the importance of modeling the
+data collection scheme as accurately as possibly whenever it deviates from simple
+random sampling to leverage all gains for inference that the design offers. 
+The random effect components of linear mixed effect models offer an convenient 
+and easy way to do this and provide adequate inference (especially for large 
+sample sizes). 
+
+
+## Is the Performance Gain from Feedback Uniform for all Sentences?
+
+Anyway, we have observed that a large fraction of variation could be attributed
+to--until now unspecific--differences between sentences. This fact should 
+encourage as to further refine our analytical model and find sentence features
+that had an impact on system performance to make more refined statements about 
+system performance differences.
+
+Let us investigate the possibility that the TER value of a machine translation by 
+our systems depends on the length (measured in words) of the source language 
+sentence. To get a first impression we create a scatter plot with source sentence 
+length on the abscissa and TER of the translation on 
+the ordinate for all systems. For a better visual comprehensibility we add 
+contour lines and a non-parametric smoother to illustrate the systematic relationship
+between both variables.
+
+```{r kreutzer_sig_fig2, echo=FALSE, message=FALSE, fig.height = 3.9, fig.width = 8.3, fig.align = "center"}
+ggplot(data = data_ter, 
+       aes(x = src_length, y = ter, colour = system)) +
+  theme_bw()+
+  theme(legend.position = 'none') +
+  facet_wrap(~system) +
+  xlab("Source Sentence Length") +
+  ylab("TER Score") +
+  geom_point(aes(colour = system), alpha = .1) + #add points
+  geom_vline(xintercept = c(15, 55), linetype = "dashed") +
+  geom_density_2d(alpha = .3) +                  #add contour lines
+  geom_smooth(method = "loess", se = FALSE)      #add loess smoother
+  #geom_smooth(method = "gam", se = FALSE)       #alternative: gam smoother
+```
+We see that the shape of the point cloud is rather similar for all systems and 
+that the relation between TER and source sentence length is increasing for all 
+systems. In essence we see an increase in TER for short sentences (below 15 
+words) followed by an rather flat section and a steep increase for very long 
+sentences (above 50-55 words length). While the three system seems to behave 
+nearly identical for sentences between 15 to 55 words length they show noticeably
+differences for short an especially long sentences. To emphasize this point,
+we classify the sentence length in three categories "short" (<15), "typical" (15-55), 
+and "very long" (>55) and create boxplots.
+
+```{r classify sentences by length}
+data_ter_mean %<>%
+  mutate(src_length_class = factor((src_length > 15) + (src_length > 55), 
+                                   levels = 0:2, 
+                                   labels = c("short", "typical", "very long"))) 
+
+data_ter %<>%
+  mutate(src_length_class = factor((src_length > 15) + (src_length > 55), 
+                                   levels = 0:2, 
+                                   labels = c("short", "typical", "very long"))) 
+```
+
+```{r kreutzer_sig_fig3, fig.height = 3.9, fig.width = 8.3, fig.align = "center"}
+data_plot <-  data_ter
+
+levels(data_plot$src_length_class) <- 
+glue("{levels(data_plot$src_length_class)} (#sentences={table(data_ter_mean$src_length_class) / 3})")
+
+
+ggplot(data = data_plot) +
+  theme_bw() +
+  theme(legend.position = "none") +
+  xlab("") +
+  ylab("TER Score") +
+  geom_boxplot(aes(x = src_length_class, y = ter, fill = system), alpha = .3)
+```
+
+This plot highlights the observation that most of the improvement gained from human
+feedback happens for very long sentences and to a lesser degree for very short
+ones. But there is no practically relevant improvement for sentences of moderate
+length. 
+
+In order to test this hypothesis we extend the last model from the previous 
+section by including a factor^[**factor** is synonym for categorical covariates
+in the regression literature.] for sentence length ("src_length_class"). For the 
+formulation of this model we use the term "system*src_length_class". This is a short
+hand notation for "system + src_length_class + system:src_length_class". The first two 
+terms of this formula are called **main effects** and the third one is called
+a twofold **interaction**.  A main effect is the effect of a covariate on a 
+response variable averaged across the levels of any other covariate. Thus a main
+effect captures the effect of the covariate independent of all other covariates
+in the model. Complementary an interaction captures the interdependence of the 
+involved effects. The absence or presence of an (statistically significant) 
+interaction has a great impact on the interpretation of a model. In the absence of 
+a statistically significant interaction the total effect is simply the sum of the 
+main effects (such a structure is called (purely) additive) . In case of 
+a present interaction the final interpretation demands a more detailed analysis.
+
+Anyway let us proceed with our example:
+
+```{r LMEM with system/input length interaction as fixed effect, warning=FALSE}
+model_ssl <- 
+  #formula expands to:
+  #ter ~ system + src_length_class + system:src_length_class + (1 | sentence_id)
+  lmer(ter ~ system*src_length_class + (1 | sentence_id), data = data_ter)
+```
+
+
+In order to conduct significance tests for the main and interaction effects, we 
+use the **anova** function and call it on the model.
+
+```{r omnibus test for interaction model}
+anova(model_ssl, lmer.df = "asymptotic")
+```
+
+The first think we should check is the p-value of the interaction. In our case
+the value ($\text{p} < .0001$) is less than $\alpha = .05$. Thus we conclude 
+that the systems do not perform consistently (purely additive) over sentences of 
+different length. To get a clearer picture about the exact nature of this 
+interaction we draw an **interaction plot**.
+A interaction plot (for categorical covariates) is usally a diagram of the 
+involved cell (subgroup) means. We can calculate these means via the emmmeans
+function applied to the fitted model:
+
+```{r calc group means investige interaction}
+group_means_ssl <- 
+  emmeans(model_ssl, ~ system:src_length_class, lmer.df = "asymptotic")
+```
+
+```{r kreutzer_sig_fig4, echo=FALSE, fig.height = 3.9, fig.width = 8.3, fig.align = "center"}
+ggplot(as_tibble(group_means_ssl)) +
+  theme_bw() +
+  theme(legend.position = c(0.1,.8)) +
+  xlab("Source Sentence Length (grouped)") +
+  ylab("Estimated Group Mean") + 
+  geom_pointrange(aes(x = src_length_class, 
+                      y = emmean,
+                      ymin = emmean - SE,
+                      ymax = emmean + SE,
+                      colour = system),
+                  alpha = .7) +
+  geom_line(aes(x = src_length_class,
+                y = emmean,
+                group = system,
+                colour = system), 
+            alpha = .3)
+```
+
+This plot is really helpful in understanding interactions. Like in the previous
+boxplot we can see that the system perform nearly identical for moderatly long 
+sentences and that both feedback trained models slightly improve the baseline 
+model for short sentences. The biggest improvements can be seen for long
+sentences where it also seems that post edit outperforms marking feedback.
+In order to test this set of hypotheses we request pairwise contrasts nested 
+within source sentence length levels. We use the "emmeans" function with the 
+following arguments (look at the specs parameter) for this:
+
+```{r conduct post hoc test}
+emmeans(object = model_ssl, 
+        specs  = pairwise ~ system | src_length_class, 
+        lmer.df = "asymptotic")$contrasts #..$contrasts to just print the contrasts
+```
+
+The results of the contrasts largely confirms the impression we gained from the 
+interaction plot. For short sentences we see statistically significant (both 
+p-values are less than or equal to $.0002$) improvements of $.012$ respectively $.016$ TER 
+points of the baseline model on average for both feedback trained systems but no 
+statistically significant ($\text{p} = .2683$) performance difference between 
+the feedback trained systems. For typically long sentences only the marking 
+system showed a low ($.00782$ TER) but statistically significant 
+($\text{p} =.0175$) improvement. The largest statistically significant 
+improvement was observed for the post edit trained system for very long sentences 
+($.107$ TER) this improvement was also statistically significantly 
+($\text{p} =.0252$) larger than gain from marking feedback ($.07286$ TER).
+
+
+Briefly summarized: This analysis has revealed that in contrast to the previous result 
+--were descriptively (but not statistically significant) the marking system seems to show a higher improvement than the post edit system-- the picture is more nuanced. 
+We see that for short sentences both systems show an equal improvement over the baseline model.
+For typical sentences (which is the majority class of sentences in our example) only 
+improvement of the marking system is statistically significant. It also seems that 
+there is a weaker improvement by the post edit system, but the effect seems to be too weak
+to be detectable by our experiment. This pattern is flipped for very long sentences,
+where the post edit is clearly superior to all other systems. 
+These results suggest that there is no uniform superiority of one feedback mode 
+over the other and when  designing a feedback mechanism the machine 
+learning researcher should consider different feedback modes depending on 
+sentence length.

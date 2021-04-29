@@ -1,0 +1,626 @@
+---
+title: 'Using LMEMs to Analyse Model Performance Beyond Mean Measures'
+author: 
+  - Michael Hagmann^[hagmann@cl.uni-heidelberg.de]
+  - Stefan Riezler
+  
+date: '`r format(Sys.Date(), "%B %d, %Y")`'
+
+output:
+  bookdown::pdf_book: default
+
+urlcolor: blue
+
+header-includes:
+  - \usepackage{mathtools}
+  - \usepackage{amsmath}
+---
+
+```{r, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      cache.lazy = FALSE,
+                      dev = c("svglite", "pdf", "png"),
+                      dpi = 300,
+                      fig.path = 'figures/',
+                      fig.keep = "high")
+
+
+#added from: https://github.com/yihui/knitr-examples/blob/master/077-wrap-output.Rmd
+library(knitr)
+hook_output = knit_hooks$get('output')
+knit_hooks$set(output = function(x, options) {
+  # this hook is used only when the linewidth option is not NULL
+  if (!is.null(n <- options$linewidth)) {
+    x = knitr:::split_lines(x)
+    # any lines wider than n should be wrapped
+    if (any(nchar(x) > n)) x = strwrap(x, width = n)
+    x = paste(x, collapse = '\n')
+  }
+  hook_output(x, options)
+})
+```
+
+```{r, message=FALSE, include=FALSE}
+library(tidyverse) # A collection of packages for data science. More about it on 
+                   # www.tidyverse.com
+library(magrittr)  # A package that provides pipe operators like %>%
+library(lme4)      # A package 
+library(glue)      # A package that provides interpolated string functions.
+library(latex2exp) # A package that converts latex to plotmath expressions.library(lmerTest)
+library(lmerTest)  # A package that improves inference for LMEM.
+library(emmeans)   # A package that allows to conduct post-hoc tests.
+library(parameters)    # A package that 
+```
+
+# Assessing and Quantifing Hyperparameter Influence
+
+In it's most abstract representation a machine learning model can be viewed as 
+a class of functions $\{ \text{f}_\vartheta : \vartheta \in \left( \Theta, \Lambda \right) \}$
+indexed by a parameter $\vartheta$ in a parameter space $\left( \Theta, \Lambda \right)$ where
+$\Theta$ denotes trainable parameters of the model and $\Lambda$ denotes so called
+**hyperparameters** which have to be chosen before model training can happen. A 
+machine learning algorithm then is a procedure $\text{g}_{\lambda \in \Lambda}$ that 
+based on training data points selects one of the functions $\text{f}_\vartheta$.
+In general one can distinct two classes of hyperparameters. The first class 
+describes structural aspects of the model like number of layers, width of layers,
+choice of activation function etc. We call this class **model hyperparameters**.
+The second class of hyperparameters controls aspects of the learning process (e.g.
+learning rate, choice of random seed, batch size etc.). We call this class 
+**algorithm hyperparameters**. Ideally the impact of algorithm hyperparmeters is 
+limited to properties of the training process so that the exact choice of values
+(within reasonable limits) exert only a marginal influence on the performance of 
+the trained model.
+
+The assessment and quantification of hyperparameter influence on the 
+performance of the final system is of uttermost importance to make statements
+about tunability, replicability and robustness of a system.
+
+In the following sections we extend the models we have build so far to assess
+the impact of three different hyperparameters for marking based feedback training:
+
+1. Weighting scheme of correct and incorrect tokens 
+2. Learning rate
+3. random seed
+
+## Summarize the resulting models that have been visited during training
+
+Let us load the data and assess the models that Kreutzer et al. have visited 
+during hyperparameter parameter tuning: 
+
+```{r read data}
+data_hyperPar <- 
+ readRDS("data/data_hyperparameter-marking_partial.rds")
+
+summary(data_hyperPar)
+```
+We are already familiar with the variables "ter", "sentence_id", "system", 
+"src_length" and "src_length_class". The variables "decoder_dropout", 
+"decoder_dropout_hidden", "encoder_dropout", "learning_rate", "seed" and "delta_scheme" 
+store the particular values selected for training the model. We are 
+interested in the latter three so we focus on them. 
+We see that three different relatively close learning rates were considered 
+($.0001$, $.0003$ and $.0005$) as  well as three different seeds. Things are a 
+bit different for "delta_scheme" were only two different settings were applied. 
+One setting applied symmetric positive and negative weights in the loss function
+(this setting is called "(-0.5:0.5)") and the other setting simply dropped the 
+terms for the negative feedback tokens (it is called "(0:1)"). 
+
+In the following sections we show two ways following different aims to
+conduct hyperparameter analysis.
+
+
+## Hyperparameter as Fixed Effect: Reward Weights
+
+In this section we are interested in a detailed analysis of the effect of 
+different delta weights incorported in the loss function. For this purpose we 
+regard the variable "delta_scheme" as a fixed effects variable. 
+This allows us to estimate the corresponding group means and conduct inference 
+similar to what w we have seen in the previous sections.
+
+In essence we apply the same technique we have used to analyze the dependence of 
+system performance on source sentence length. The only thing that differs are
+the involved covariates. Of course we cannot include system in our model, because 
+we conduct this analysis per system (in our example the marking system). We still
+include "src_length_class" because we know that it has a significant influence on TER
+and a random intercept for "sentence_id" to account for the clustering due to 
+multiple measurements of a sentence. As we are interested in the effect of the 
+delta weighting scheme on the TER score we have to include "delta_scheme" in the 
+model.
+
+```{r analyze weighting scheme as fixed parameter}
+model_delta <-   
+  lmer(ter ~ src_length_class*delta_scheme + (1 | sentence_id), 
+       data = data_hyperPar)
+```
+
+Like previously, the first test we conduct are for the global null hypothesis 
+for each model term:
+
+```{r}
+anova(model_delta)
+```
+
+And like before, we see that the interaction term of our model is statistically
+significant ($\text{p} < .0001$). Thus we have to assess the interaction pattern
+and therefore generate an interaction plot:
+
+```{r}
+group_means_delta <- 
+  emmeans(model_delta, pairwise ~ delta_scheme:src_length_class, lmer.df = "asymptotic")
+```
+
+```{r kreutzer_rel_model_fig1, echo=FALSE, fig.height = 3.9, fig.width = 8.3, fig.align = "center"}
+ggplot(as_tibble(group_means_delta$emmeans)) +
+  theme_bw() +
+  theme(legend.position = c(0.1,.8)) +
+  xlab("") +
+  ylab("Estimated Group Mean") + 
+  geom_pointrange(aes(x = src_length_class, 
+                      y = emmean,
+                      ymin = emmean - SE,
+                      ymax = emmean + SE,
+                      shape = delta_scheme),
+                  alpha = .7) +
+  geom_line(aes(x = src_length_class,
+                y = emmean,
+                group = delta_scheme,
+                linetype = delta_scheme), 
+            alpha = .3)
+```
+
+A look at this plot clearly tells us that the choice of the weighting scheme only 
+makes a difference for long sentences, where the "(-0.5:0.5)" seems to perform 
+better than "(0:1)". Like before we request pairwise comparisons of the different
+schemes for each sentence length class to assess statistical significance:
+
+```{r}
+emmeans(object  = model_delta, 
+        spec    = pairwise ~ delta_scheme | src_length_class,
+        lmer.df = "asymptotic")$contrasts
+```
+
+We see that the test results confirm the impression gained from the interaction
+plot. The only statistically significant ($\text{p} < .0001$) difference is a 
+$0.053998 $ TER points improvement of "(-0.5:05)" for long sentences. This difference
+is nearly 50% of the gain over the baseline system that we have seen for the 
+marking feedback trained system. Such a result should trigger our interest in 
+an explanation. Unfortunately this is beyond the ambit of this document.
+But do you have any idea?
+
+
+## Hyperparamater as Random Effect: Learning Rate
+
+Another way to analyze hyperparameters is to regard them as random effects. Such
+a model is appropriate when our analytical goal is not a detailed statement about
+certain values of a hyperparamters but a summarization of the extend that this 
+hyperparameter influences a model's performance. This number will be affected by 
+the values that we regard while training. Similar values of a hyperparameter 
+will in general lead to similar trained models given that anything else is 
+equal. And more heterogeneous choices will lead to models that differ more. Thus,
+we recommend that for such an analysis one should restrict the values considered 
+for a hyperparamater to the range of commonly used values and that the actual 
+choice covers the full range to draw a practically relevant conclusion.
+
+To illustrate the method we analyze the influence of learning rate on the 
+performance of the marking feedback trained system with the "(-0.5:0.5)" delta
+weighting scheme. Like in the fixed effect hyperparameter analysis we start with
+a model that includes source sentence length ("src_length_class") as fixed effect and 
+a random intercept for each sentence to account for multiple measurements. We expand 
+this model by adding a so called nested random effect for "src_length_class" nested
+in "learning_rate". The formula notation for this is (1 | learning_rate / src_length_class).
+This is a short hand notation for (1 | learning_rate) + (1 | learning_rate:src_length_class).
+This expanded form clearly shows that the model includes an individual (random) 
+intercept for each learning rate and within each learning rate an individual 
+(random) intercept for each sentence length category. Thus this model 
+structurally resembles the previous model, but now only one of the covariates is
+associated with a fixed effect ("src_length_class") and the other one ("learning_rate") as 
+well as the interaction are associated with a random effect.
+
+```{r}
+model_lr <-  
+  lmer(ter ~ 
+        src_length_class + 
+        (1 | sentence_id) + 
+        #nested random effect expands to:
+        #(1 | learning_rate) + (1 | learning_rate:src_length_class)
+        (1 | learning_rate / src_length_class), 
+       data = select(data_hyperPar, 
+                     ter, src_length_class, sentence_id, learning_rate, delta_scheme),
+       subset = delta_scheme == "(-0.5:0.5)")
+```
+
+In order to assess the statistical significance of (1 | learning_rate / src_length_class) 
+we can apply a **likelihood ratio tests** (LRT). Before we can conduct a LRT we have 
+to fit an appropriate nested model which we are going to compare to "model_lr". 
+In our case this is a model where all variance parameters associated with 
+learning rate are restricted to be zero. We can fit such a model by simply 
+dropping the term (1 | learning_rate / src_length_class) in the model description.
+
+```{r}
+model_basic <- 
+  lmer(ter ~ 
+        src_length_class + 
+        (1 | sentence_id), 
+       data = select(data_hyperPar, 
+                     ter, src_length_class, sentence_id, learning_rate, delta_scheme),
+       subset = delta_scheme == "(-0.5:0.5)")
+```
+
+In order to conduct a LRT between both models we can use the **anova** function
+and call it with both models:
+
+```{r}
+anova(model_basic, model_lr, refit = FALSE) #refit = FALSE prevents refitting with ML method
+```
+
+The important lines of the output are between the model specifications and the 
+"---". Here we can read that the log-likelihood of the smaller model is 12925 and 
+13314 for the larger model which uses 2 degrees of freedom (Df) more. The p-value
+of the corresponding $\chi^2$ test statistic is less than $.0001$. Thus the 
+term (1 | learning_rate / src_length_class) statistically significantly improves the
+model.
+
+In order to see how much variation can be attributed to learning rate we extract 
+the variance components for the random effects from the model. We can use
+the **VarCorr** function for this:
+
+```{r}
+VarCorr(model_lr) %>% print(., comp = "Variance")
+```
+
+We see that we receive a variance estimate for both of the expanded terms of 
+(1 | learning_rate / src_length_class). In order to calculate an intraclass
+correlation coefficient (ICC) for the nested model term we have to add these
+estimates together and put them in relation to the total variance. These 
+calculations are implemented in the following function:
+
+```{r Function Definition: ICC, include=FALSE, echo=FALSE}
+ICC <- function(model) {
+
+  nested_terms <-  
+    formula(model) %>%
+    as.character(.) %>%
+    str_extract_all(., "(?<=[|] ?)[[:word:]]+[/][[:word:]]+(?= ?[)])") %>%
+    unlist(.) %>%
+    na.omit(.) %>%
+    as.vector(.) %>%
+    str_trim(.)
+  
+  variances <- 
+    as_tibble(VarCorr(model)) %>%
+    select(effect    = grp,
+           variance  = vcov) 
+             
+
+  rpl_effect <- function(x, str) {
+  
+    x <- str_trim(x)
+    
+    nested_hyperPar <- 
+    strsplit(str, "/", fixed = TRUE)[[1]][1] %>%
+    str_trim(.) %>%
+    #add regx condition to prevent substring matching:
+    paste0(., "($|:)")  
+  
+    x[grepl(nested_hyperPar, x)] <- str  
+  
+    return(x)
+  }
+
+  variances$effect <-    
+    reduce(.x    = nested_terms,
+           .f    = rpl_effect,
+           .init = variances$effect,
+           .dir  = "forward")
+
+  variances %<>%
+    group_by(effect) %>%
+    summarize(variance = sum(variance, na.rm = TRUE)) %>%
+    ungroup() %>%
+    mutate(icc      = round(variance / sum(variance, na.rm = TRUE), 4),
+           icc_perc = round(icc * 100, 2)) %>%
+    arrange(desc(icc))
+  
+  return(variances)
+}  
+```
+
+To calculate the ICCs for a model simple call the function on a model:
+
+```{r, message=FALSE}
+ICC(model_lr)
+```
+We see that still most of the variation is due to sentence differences (about 77%)
+and only a small amount is due to different learning rates (about 1%). 
+
+
+## Assessing More Than One Hyperparamater
+
+This procedure can easily be extended to consider two or more hyperparameters 
+simultaneously. We illustrate this by adding seed to our model.
+
+The only thing we have to do is to add the term (1 | seed / src_length_class) to 
+our model definition:
+
+```{r, warning=FALSE, message=FALSE}
+model_lrs <-  
+  lmer(ter ~ 
+        src_length_class + 
+        (1 | sentence_id) + 
+        (1 | learning_rate / src_length_class) +
+        (1 | seed / src_length_class), 
+       data = select(data_hyperPar, seed, 
+                     ter, src_length_class, sentence_id, learning_rate, delta_scheme),
+       subset = delta_scheme == "(-0.5:0.5)")
+```
+
+In order to conduct LRTs for both hyperparameter terms we need to fit two 
+restricted models. One where we dropped the seed term and one where we dropped
+the learning rate term:
+
+```{r, warning=FALSE, message=FALSE}
+model_noSeed <- 
+  lmer(ter ~ 
+        src_length_class + 
+        (1 | sentence_id) + 
+        (1 | learning_rate / src_length_class),
+       data = select(data_hyperPar, seed,
+                     ter, src_length_class, sentence_id, learning_rate, delta_scheme),
+       subset = delta_scheme == "(-0.5:0.5)",
+       control = lmerControl(optimizer ='optimx', optCtrl=list(method='nlminb')))
+
+model_nolr <-
+  lmer(ter ~ 
+        src_length_class + 
+        (1 | sentence_id) + 
+        (1 | seed / src_length_class), 
+       data = select(data_hyperPar, seed,  
+                     ter, src_length_class, sentence_id, learning_rate, delta_scheme),
+       subset = delta_scheme == "(-0.5:0.5)",
+       control = lmerControl(optimizer ='optimx', optCtrl=list(method='nlminb')))
+```
+Analog to the previous section we call "anova" with the appropriate models to conduct
+the LRT. For the seed term we supply the unrestricted model ("model_lrs") and 
+the model without a seed term ("model_noSeed"):
+
+```{r}
+anova(model_lrs, model_noSeed, refit = FALSE)
+```
+
+We see that the likelihood contribution of (1 | seed / src_length_class) is statistically
+significant ($\text{p} = .01118$). 
+
+In a completely analogous way we can perform a LRT for learning rate.
+
+```{r}
+anova(model_lrs, model_nolr, refit = FALSE)
+```
+
+And we see, that the likelihood contribution of (1 | seed / src_length_class) is 
+also statistically significant ($\text{p} < .0001$).
+
+Now that we know that our observed data suggest to reject the null hypotheses we 
+can (and should) interpret the amount of variation due to each hyperparamater. 
+
+```{r, message=FALSE}
+ICC(model_lrs)
+```
+
+We see that the actual contribution of both hyperparameters is less than 1% and 
+for seed actually much lower (.01%). Therefore the influence of both hyperparameters
+is practically neglectable. 
+
+
+## Calculating ICC based reliability coefficients 
+
+In this secton we are going to calculate ICC based reliability coefficients like 
+we have done for the marking/post edit based translation quality judgments given 
+by human annotators or the train from scratch example for the marking based 
+refined system (based on the "(-0.5:0.5)" loss function). 
+
+The current example deviates from the above ones in a crucial way. Whereas the 
+data in the previous examples was obtained from a fully crossed and balanced design 
+(every combination of factor/facet/hyperparamater levels was observed with equal 
+frequency) this time the data was obtained by a "natural" hyperparamter search 
+which was not based on fully evaluated grid. 
+
+To illustrate the impact of this incompleteness on the estimated ICCs we are 
+going to consider three different data setups:  
+
+  1. The models generated by Kreutzer et al on a partial grid
+  2. The models obtained from a full grid version of Kreutzer et al.'s parameter choices
+  3. An extended grid where the grid in 2 is extended with new hyperparamter values
+
+
+### The partial grid considered by Kreutzer et al.
+
+```{r minimize data for model, include=FALSE}
+data_hyperPar %<>%
+  filter(delta_scheme == "(-0.5:0.5)") %>%
+  select(-system, -src_length, -delta_scheme)
+```
+
+This search was conducted along the following hyperparameters (considered values are given in braces):
+
+  * learning_rate {1e-04, 3e-04, 5e-04}
+  * encoder_dropout {.2, .4, .6}
+  * decoder_dropout {.2, .4}
+  * decoder_dropout_hidden {.2, .4, .6}
+  * seed {42, 43, 44}
+  
+But not all possible combinations were visited. Only the following combinations 
+have been evaluated (for all three seeds):
+
+```{r show partial grid, include=FALSE}
+data_hyperPar %>%
+  select(-ter, -sentence_id, -src_length_class, -seed) %>%
+  distinct() %>%
+  head(., n=nrow(.))
+```
+
+In total Kreutzer et al. have visited 27 systems.
+
+```{r variance decomposition partial grid, warning=FALSE, include=FALSE, cache=TRUE}
+var_decomp_partial <- 
+  lmer(ter ~ 
+        (1 | sentence_id) + 
+        (1 | learning_rate) +
+        (1 | seed) + 
+        (1 | decoder_dropout) +
+        (1 | decoder_dropout_hidden) +
+        (1 | encoder_dropout), 
+       data = data_hyperPar,
+       control = lmerControl(optimizer = "nloptwrap", calc.derivs = FALSE))
+```
+
+For these models we obtained the following ICCs (based on a single random effect model):
+
+```{r ICC for partial grid}
+ICC(var_decomp_partial)
+```
+
+
+### The models obtained from a full grid version of Kreutzer et al.'s parameter choices
+
+Now we take the same hyperparameter (and values) as in the previous section, but 
+consider systems obtained under all hyperparameter combinations. 
+
+  * learning_rate {1e-04, 3e-04, 5e-04}
+  * encoder_dropout {.2, .4, .6}
+  * decoder_dropout {.2, .4}
+  * decoder_dropout_hidden {.2, .4, .6}
+  * seed {42, 43, 44}
+
+Which yields a total of 162 systems for this analysis. 
+
+```{r load full grid data, include=FALSE}
+data_hyperPar_full <- 
+  readRDS("data/data_hyperparameter-marking_full.rds") %>%
+  filter(delta_scheme == "(-0.5:0.5)") %>%
+  select(-system, -src_length, -delta_scheme)
+```
+
+```{r show full grid, include=FALSE, eval=FALSE}
+data_hyperPar_full %>%
+  select(-ter, -sentence_id, -src_length_class) %>%
+  group_by(across()) %>
+```
+
+
+
+```{r  variance decomposition full grid, warning=FALSE, include=FALSE, cache=TRUE}
+var_decomp_full <- 
+  lmer(ter ~ 
+        (1 | sentence_id) + 
+        (1 | learning_rate) +
+        (1 | seed) + 
+        (1 | decoder_dropout) +
+        (1 | decoder_dropout_hidden) +
+        (1 | encoder_dropout), 
+       data = data_hyperPar_full,
+       control = lmerControl(optimizer = "nloptwrap", calc.derivs = FALSE))
+```
+
+For these models we obtained the following ICCs (based on a single random effect model):
+
+```{r ICC for full grid}
+ICC(var_decomp_full)
+```
+
+We see, that qualitative picture stays the same for this analysis as for the one 
+in the previous section. The Sentence related variance is by far the largest 
+variance component, and we can attribute more than 80% of variance to it. The 
+second largest source of variation is the initial learning rate parameter. It's
+contribution is less than 1%. All the dropout related hyperparameters showed no 
+substantial influence of the outcome. The related ICCs were less than .13%.
+
+Summarizing this comparison we have seen, that a reliability analysis even when
+conducted on an unsystematic and small subset of a grid yield informative results
+that gave a correct and good impression of hyperparameter influence.
+
+
+### An extended grid where the grid in 2 is extended with new hyperparamter values
+
+```{r load extended grid data, include=FALSE}
+data_hyperPar_extended <- 
+  readRDS("data/data_hyperparameter-marking_extended.rds") %>%
+  filter(delta_scheme == "(-0.5:0.5)") %>%
+  select(-system, -src_length, -delta_scheme)
+```
+
+In this setup  we took the complete grid analyzed in the previous section but
+extended the value sets for each hyperparameter (except seed). 
+
+  * learning_rate {1e-04, 3e-04, 5e-04, **1e-3**}
+  * encoder_dropout {**0**, .2, .4, .6}
+  * decoder_dropout {**0**, .2, .4, **.6**}
+  * decoder_dropout_hidden {**0**, .2, .4, .6}
+  * seed {42, 43, 44}
+ 
+Systems were trained for all possible combinations, so that a total of 768 
+systems.  
+
+Compared to the previous grid we increased the largest learning rate by a one 
+order and also consider models without dropout (at all or in different system 
+components). In summary the collection of systems is now much more heterogeneous 
+compared to the previous section. This heterogeneity should lead to a more diverse 
+model performance. Because this heterogeneity was introduced by extremer 
+hyperparameter values we can expect to see a drop in sentence attributed variance 
+and an increase in hyperparameter related variance. 
+  
+
+```{r show extended grid, eval=FALSE, include=FALSE}
+data_hyperPar_extended %>%
+  select(-ter, -sentence_id, -src_length_class, -seed) %>%
+  distinct()
+```
+
+```{r variance decomposition extended grid, warning=FALSE, include=FALSE, cache=TRUE}
+var_decomp_extended <- 
+  lmer(ter ~ 
+        (1 | sentence_id) + 
+        (1 | learning_rate) +
+        (1 | seed) + 
+        (1 | decoder_dropout) +
+        (1 | decoder_dropout_hidden) +
+        (1 | encoder_dropout), 
+       data = data_hyperPar_extended,
+       control = lmerControl(optimizer = "nloptwrap", calc.derivs = FALSE))
+```
+
+
+```{r ICC for extended grid}
+ICC(var_decomp_extended)
+```
+
+\newpage
+## ADDED: QUICK CHECK
+### partial grid
+```{r quick check: partial grid, warning=FALSE, include=TRUE, cache=TRUE}
+var_decomp_partial <- 
+  lmer(ter ~ 
+        (1 | sentence_id),
+       data = data_hyperPar,
+       control = lmerControl(optimizer = "nloptwrap", calc.derivs = FALSE))
+```
+
+For these models we obtained the following ICCs (based on a single random effect model):
+
+```{r ICC for quick check on partial grid}
+ICC(var_decomp_partial)
+```
+
+### full grid
+```{r quick check: full grid, warning=FALSE, include=TRUE, cache=TRUE}
+var_decomp_partial <- 
+  lmer(ter ~ 
+        (1 | sentence_id),
+       data = data_hyperPar_full,
+       control = lmerControl(optimizer = "nloptwrap", calc.derivs = FALSE))
+```
+
+For these models we obtained the following ICCs (based on a single random effect model):
+
+```{r ICC for quick check on full grid}
+ICC(var_decomp_partial)
+```
