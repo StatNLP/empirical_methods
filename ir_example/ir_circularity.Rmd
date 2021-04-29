@@ -1,0 +1,276 @@
+---
+title: 'Detecting Circular Features: Information Retrieval Example'
+author: 
+  - Michael Hagmann ^[hagmann@cl.uni-heidelberg.de]
+  - Stefan Riezler
+  
+date: ""
+
+output:
+  pdf_document:
+    latex_engine: xelatex
+  bookdown::pdf_book: default
+    
+urlcolor: blue
+---
+
+```{r, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      cache.lazy = FALSE,
+                      dev = c("svglite", "pdf", "png"),
+                      dpi = 300,
+                      fig.path = 'figures/',
+                      fig.keep = "high")
+
+#added from: https://github.com/yihui/knitr-examples/blob/master/077-wrap-output.Rmd
+library(knitr)
+hook_output = knit_hooks$get('output')
+knit_hooks$set(output = function(x, options) {
+  # this hook is used only when the linewidth option is not NULL
+  if (!is.null(n <- options$linewidth)) {
+    x = knitr:::split_lines(x)
+    # any lines wider than n should be wrapped
+    if (any(nchar(x) > n)) x = strwrap(x, width = n)
+    x = paste(x, collapse = '\n')
+  }
+  hook_output(x, options)
+})
+
+```
+
+
+```{r, message=FALSE, include=FALSE}
+library(tidyverse) # A collection of packages for data science. More about it on 
+                   # www.tidyverse.com
+library(magrittr)  # A package that provides pipe operators like %>%
+library(mgcv)      # A package written by Simon Wood that implements his 
+                   # (spline based) GAM specification.
+library(glue)      # A package that provides interpolated string functions.
+```
+
+
+
+
+```{r, include=FALSE}
+#When you want to reproduce the examples, you have to run this code chunk in advance!!
+powerSet <- function(set) {
+  
+    apply(X      = rep(list(c(T,F)), length = length(set)) %>% expand.grid(.),
+          MARGIN = 1,
+          FUN    = function(...) set[...])
+}
+```
+
+
+```{r read train data, include=FALSE}
+train_data <- readRDS("ir_trainset.rds")
+```
+
+
+## SEARCH FOR CIRCULAR FEATURES
+```{r define feature list, include=FALSE}
+feature_list <- 
+  c("s(score_neural)", "s(score_tfIdf)", "cited_inventor", "cited_examiner", "cited_family")
+```
+
+```{r ir_model_search, cache=TRUE, include=FALSE}
+fitted_models <-
+  #generate the power set of feature_list, and remove the void set 
+  powerSet(feature_list)[-(2^length(feature_list))] %>%
+  #build the symbolic model description  
+  sapply(., function(...) glue("relevance~{glue_collapse(..., sep='+')}")) %>%
+  #fit the models to data, and extract key statistics
+  tibble(formula_str = .,
+         models      = lapply(X = .,
+                              FUN  = function(m_str,...) gam(as.formula(m_str), ...),
+                              data = train_data),
+         data_fit    = round(sapply(models, function(m) summary(m)$dev.expl) * 100),
+         complexity  = sapply(models, function(...) attr(logLik(...), 'df'))) %>%
+  #Sort the models so that we can find models that replicate the data well.
+  #For this models the deviance should be approximatly zero.
+  arrange(desc(data_fit), complexity)
+```
+
+### TOP TEN 
+```{r, echo=FALSE}
+head(fitted_models[,-2], n = 10)
+```
+
+### SELECTED MODEL (FEATURE SHAPES)
+```{r, echo=FALSE}
+selected_model <- fitted_models$models[[1]]
+
+summary(selected_model)
+```
+
+
+\newpage
+```{r ir_circ_fig1, echo=FALSE, fig.height = 3.9, fig.width = 8.3, fig.align = "center"}
+relevance <- function(x, coeff = 0:3) coeff[round(x) + 1]
+
+pseudoSmoother <- function(x, model = selected_model) {
+  coef(model)[round(x) + 1]
+}
+
+dev_selected <- floor(summary(selected_model)$dev.expl * 100)
+
+par(mfrow = c(1,2), mar=c(4,3,2,1), oma = c(1,1,1,1))
+  plot.function(relevance, 
+      from = -.49, 
+      to   = 3.49, 
+      n    = 1001, 
+      lty  = "dashed",
+      col  = "blue",
+      xlim = c(-.49, 3.49),
+      ylim = c(0,3),
+      xaxt = "n",
+      yaxt = "n",
+      main = glue("Theoretical Function"),
+      ylab = "Relevance", 
+      xlab = "")
+    axis(1, at = 0:3, labels = c("none", "inventor", "examiner", "family"), cex.axis = .9)
+    axis(2, at = 0:3, labels = 0:3)
+
+  plot.function(pseudoSmoother, 
+      from = -.49, 
+      to   = 3.49, 
+      n    = 1001, 
+      lty  = "solid",
+      xlim = c(-.49, 3.49),
+      ylim = c(0,3),
+      xaxt = "n",
+      yaxt = "n",
+      main = glue("Selected Model (D\U00B2={dev_selected}%)"),
+      ylab = "", 
+      xlab = "")
+    axis(1, at = 0:3, labels = c("none", "inventor", "examiner", "family"), cex.axis = .9)
+    axis(2, at = 0:3, labels = 0:3)
+par(mfrow = c(1,1), mar = c(5,4,4,2))
+```
+
+
+\newpage
+### NULLIFICATION
+
+```{r fit models with and without circular feature candidates, cache=TRUE, include=FALSE}
+gam_ir_nocirc <- 
+  gam(relevance ~ s(score_tfIdf) + s(score_neural),
+      data = train_data)
+
+gam_ir_all <- 
+  gam(relevance ~ s(score_tfIdf) + s(score_neural) + cited_inventor + cited_examiner + cited_family,
+      data = train_data)
+```
+
+
+
+```{r ir_circ_fig2, echo = FALSE, fig.height = 7.8, fig.width = 8.3, fig.align = "center", warning=FALSE}
+pseudoSmoother <- function(x, model = gam_ir_all) {
+  coef(model)[round(x) + 1]
+}
+
+dev_nocirc   <- floor(summary(gam_ir_nocirc)$dev.expl * 100)
+dev_withcirc <- floor(summary(gam_ir_all)$dev.expl * 100)
+
+par(mfrow = c(3,2), mar=c(2,3,2,3), oma = c(1,1,1,1))
+    plot.function(pseudoSmoother, 
+      from = -.49, 
+      to   = 3.49, 
+      n    = 1001, 
+      type = "n", 
+      xlim = c(-.49, 3.49),
+      ylim = c(-.1,3),
+      xaxt = "n",
+      yaxt = "n",
+      main = glue("GAM without Citation Feature (D\U00B2={dev_nocirc}%)"),
+      ylab = "Pseudo Feature Shape",
+      xlab = "citation")
+    axis(1, at = 0:3, labels = c("none", "inventor", "examiner", "family"))
+    axis(2, at = 0:3, labels = 0:3)
+    text(labels = "not included in GAM",
+         x      = mean(c(-.49, 3.49)),
+         y      = mean(c(0,3)),
+         adj    = .5)
+  
+   plot.function(pseudoSmoother, 
+      from = -.49, 
+      to   = 3.49, 
+      n    = 1001, 
+      lty  ="solid",
+      xlim = c(-.49, 3.49),
+      ylim = c(-.1 ,3),
+      xaxt = "n",
+      yaxt = "n",
+      main = glue("GAM with Citation Feature (D\U00B2={dev_withcirc}%)"),
+      ylab = "", 
+      xlab = "citation")
+   axis(1, at = 0:3, labels = c("none", "inventor", "examiner", "family"))
+   axis(2, at = 0:3, labels = 0:3)
+   mtext("citation", side = 4, line = 1)
+  
+   
+  plot(gam_ir_nocirc, 
+       se   = FALSE, 
+       #rug  = TRUE, 
+       main = "",
+       ylab = "", 
+       xlab = "",
+       ylim = c(-.1,3),
+       yaxt = "n",
+       select = 1,
+       shift = coef(gam_ir_nocirc)[1])
+  axis(2, at = 0:3, labels = 0:3)
+  rug(unique(train_data$score_tfIdf))
+
+  plot(gam_ir_all, 
+     se   = FALSE, 
+     #rug  = TRUE, 
+     main = "",
+     ylab = "", 
+     yaxt = "n",
+     xlab = "",
+     ylim = c(-.1, 3),
+     select = 1)
+  axis(2, at = 0:3, labels = 0:3)
+  rug(unique(train_data$score_tfIdf))
+  mtext("tf-Idf", side = 4, line = 1)
+   
+   
+  plot(gam_ir_nocirc, 
+       se   = FALSE, 
+       #rug  = TRUE, 
+       main = "",
+       ylab = "", 
+       xlab = "",
+       ylim = c(-.1,3),
+       xlim = c(-18, 10),
+       yaxt = "n",
+       select = 2,
+       shift = coef(gam_ir_nocirc)[1])
+  axis(2, at = 0:3, labels = 0:3)
+  rug(unique(train_data$score_neural))
+
+  plot(gam_ir_all, 
+     se   = FALSE, 
+     #rug  = TRUE, 
+     main = "",
+     ylab = "", 
+     yaxt = "n",
+     xlab = "",
+     ylim = c(-.1, 3),
+     xlim = c(-18, 10),
+     select = 2)
+  axis(2, at = 0:3, labels = 0:3)
+  rug(unique(train_data$score_neural))
+  mtext("neural", side = 4, line = 1)
+  
+  
+par(mfrow = c(1,1), mar = c(5,4,4,2))
+```
+
+\newpage
+### SUMMARY: Model with all features
+```{r summarize model trained with access to all features, echo=FALSE}
+summary(gam_ir_all )
+```
+
