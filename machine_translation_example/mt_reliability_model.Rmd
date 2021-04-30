@@ -1,0 +1,384 @@
+---
+title: 'Hyperparameter Grid Search'
+author: 
+  - Michael Hagmann^[hagmann@cl.uni-heidelberg.de]
+  - Stefan Riezler
+  
+date: '`r format(Sys.Date(), "%B %d, %Y")`'
+
+output:
+  bookdown::pdf_book: default
+
+urlcolor: blue
+
+header-includes:
+  - \usepackage{mathtools}
+  - \usepackage{amsmath}
+---
+
+```{r, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      cache.lazy = FALSE,
+                      dev = c("svglite", "pdf", "png"),
+                      dpi = 300,
+                      fig.path = 'figures/',
+                      fig.keep = "high")
+
+
+#added from: https://github.com/yihui/knitr-examples/blob/master/077-wrap-output.Rmd
+library(knitr)
+hook_output = knit_hooks$get('output')
+knit_hooks$set(output = function(x, options) {
+  # this hook is used only when the linewidth option is not NULL
+  if (!is.null(n <- options$linewidth)) {
+    x = knitr:::split_lines(x)
+    # any lines wider than n should be wrapped
+    if (any(nchar(x) > n)) x = strwrap(x, width = n)
+    x = paste(x, collapse = '\n')
+  }
+  hook_output(x, options)
+})
+```
+
+```{r, message=FALSE, include=FALSE}
+library(tidyverse) # A collection of packages for data science. More about it on 
+                   # www.tidyverse.com
+library(magrittr)  # A package that provides pipe operators like %>%
+library(lme4)      # A package 
+library(glue)      # A package that provides interpolated string functions.
+library(latex2exp) # A package that converts latex to plotmath expressions.library(lmerTest)
+library(lmerTest)  # A package that improves inference for LMEM.
+library(emmeans)   # A package that allows to conduct post-hoc tests.
+library(parameters)
+```
+
+
+```{r read data}
+data_hyperPar <- 
+ readRDS("data/data_hyperparameter-marking_partial.rds")
+
+summary(data_hyperPar)
+```
+
+
+```{r analyze weighting scheme as fixed parameter}
+model_delta <-   
+  lmer(ter ~ src_length_class*delta_scheme + (1 | sentence_id), 
+       data = data_hyperPar)
+```
+
+
+```{r}
+anova(model_delta)
+```
+
+
+```{r}
+group_means_delta <- 
+  emmeans(model_delta, pairwise ~ delta_scheme:src_length_class, lmer.df = "asymptotic")
+```
+
+```{r kreutzer_rel_model_fig1, echo=FALSE, fig.height = 3.9, fig.width = 8.3, fig.align = "center"}
+ggplot(as_tibble(group_means_delta$emmeans)) +
+  theme_bw() +
+  theme(legend.position = c(0.1,.8)) +
+  xlab("") +
+  ylab("Estimated Group Mean") + 
+  geom_pointrange(aes(x = src_length_class, 
+                      y = emmean,
+                      ymin = emmean - SE,
+                      ymax = emmean + SE,
+                      shape = delta_scheme),
+                  alpha = .7) +
+  geom_line(aes(x = src_length_class,
+                y = emmean,
+                group = delta_scheme,
+                linetype = delta_scheme), 
+            alpha = .3)
+```
+
+
+```{r}
+emmeans(object  = model_delta, 
+        spec    = pairwise ~ delta_scheme | src_length_class,
+        lmer.df = "asymptotic")$contrasts
+```
+
+
+```{r}
+model_lr <-  
+  lmer(ter ~ 
+        src_length_class + 
+        (1 | sentence_id) + 
+        #nested random effect expands to:
+        #(1 | learning_rate) + (1 | learning_rate:src_length_class)
+        (1 | learning_rate / src_length_class), 
+       data = select(data_hyperPar, 
+                     ter, src_length_class, sentence_id, learning_rate, delta_scheme),
+       subset = delta_scheme == "(-0.5:0.5)")
+```
+
+
+```{r}
+model_basic <- 
+  lmer(ter ~ 
+        src_length_class + 
+        (1 | sentence_id), 
+       data = select(data_hyperPar, 
+                     ter, src_length_class, sentence_id, learning_rate, delta_scheme),
+       subset = delta_scheme == "(-0.5:0.5)")
+```
+
+
+```{r}
+anova(model_basic, model_lr, refit = FALSE) #refit = FALSE prevents refitting with ML method
+```
+
+
+```{r}
+VarCorr(model_lr) %>% print(., comp = "Variance")
+```
+
+
+```{r Function Definition: ICC, include=FALSE, echo=FALSE}
+ICC <- function(model) {
+
+  nested_terms <-  
+    formula(model) %>%
+    as.character(.) %>%
+    str_extract_all(., "(?<=[|] ?)[[:word:]]+[/][[:word:]]+(?= ?[)])") %>%
+    unlist(.) %>%
+    na.omit(.) %>%
+    as.vector(.) %>%
+    str_trim(.)
+  
+  variances <- 
+    as_tibble(VarCorr(model)) %>%
+    select(effect    = grp,
+           variance  = vcov) 
+             
+
+  rpl_effect <- function(x, str) {
+  
+    x <- str_trim(x)
+    
+    nested_hyperPar <- 
+    strsplit(str, "/", fixed = TRUE)[[1]][1] %>%
+    str_trim(.) %>%
+    #add regx condition to prevent substring matching:
+    paste0(., "($|:)")  
+  
+    x[grepl(nested_hyperPar, x)] <- str  
+  
+    return(x)
+  }
+
+  variances$effect <-    
+    reduce(.x    = nested_terms,
+           .f    = rpl_effect,
+           .init = variances$effect,
+           .dir  = "forward")
+
+  variances %<>%
+    group_by(effect) %>%
+    summarize(variance = sum(variance, na.rm = TRUE)) %>%
+    ungroup() %>%
+    mutate(icc      = round(variance / sum(variance, na.rm = TRUE), 4),
+           icc_perc = round(icc * 100, 2)) %>%
+    arrange(desc(icc))
+  
+  return(variances)
+}  
+```
+
+
+```{r, message=FALSE}
+ICC(model_lr)
+```
+
+
+## Assessing More Than One Hyperparamater
+
+```{r, warning=FALSE, message=FALSE}
+model_lrs <-  
+  lmer(ter ~ 
+        src_length_class + 
+        (1 | sentence_id) + 
+        (1 | learning_rate / src_length_class) +
+        (1 | seed / src_length_class), 
+       data = select(data_hyperPar, seed, 
+                     ter, src_length_class, sentence_id, learning_rate, delta_scheme),
+       subset = delta_scheme == "(-0.5:0.5)")
+```
+
+
+```{r, warning=FALSE, message=FALSE}
+model_noSeed <- 
+  lmer(ter ~ 
+        src_length_class + 
+        (1 | sentence_id) + 
+        (1 | learning_rate / src_length_class),
+       data = select(data_hyperPar, seed,
+                     ter, src_length_class, sentence_id, learning_rate, delta_scheme),
+       subset = delta_scheme == "(-0.5:0.5)",
+       control = lmerControl(optimizer ='optimx', optCtrl=list(method='nlminb')))
+
+model_nolr <-
+  lmer(ter ~ 
+        src_length_class + 
+        (1 | sentence_id) + 
+        (1 | seed / src_length_class), 
+       data = select(data_hyperPar, seed,  
+                     ter, src_length_class, sentence_id, learning_rate, delta_scheme),
+       subset = delta_scheme == "(-0.5:0.5)",
+       control = lmerControl(optimizer ='optimx', optCtrl=list(method='nlminb')))
+```
+
+```{r}
+anova(model_lrs, model_noSeed, refit = FALSE)
+```
+
+
+```{r}
+anova(model_lrs, model_nolr, refit = FALSE)
+```
+
+
+```{r, message=FALSE}
+ICC(model_lrs)
+```
+
+
+## Calculating ICC based reliability coefficients 
+
+### The partial grid considered by Kreutzer et al.
+
+```{r minimize data for model, include=FALSE}
+data_hyperPar %<>%
+  filter(delta_scheme == "(-0.5:0.5)") %>%
+  select(-system, -src_length, -delta_scheme)
+```
+
+```{r show partial grid, include=FALSE}
+data_hyperPar %>%
+  select(-ter, -sentence_id, -src_length_class, -seed) %>%
+  distinct() %>%
+  head(., n=nrow(.))
+```
+
+
+```{r variance decomposition partial grid, warning=FALSE, include=FALSE, cache=TRUE}
+var_decomp_partial <- 
+  lmer(ter ~ 
+        (1 | sentence_id) + 
+        (1 | learning_rate) +
+        (1 | seed) + 
+        (1 | decoder_dropout) +
+        (1 | decoder_dropout_hidden) +
+        (1 | encoder_dropout), 
+       data = data_hyperPar,
+       control = lmerControl(optimizer = "nloptwrap", calc.derivs = FALSE))
+```
+
+
+```{r ICC for partial grid}
+ICC(var_decomp_partial)
+```
+
+
+```{r load full grid data, include=FALSE}
+data_hyperPar_full <- 
+  readRDS("data/data_hyperparameter-marking_full.rds") %>%
+  filter(delta_scheme == "(-0.5:0.5)") %>%
+  select(-system, -src_length, -delta_scheme)
+```
+
+```{r show full grid, include=FALSE, eval=FALSE}
+data_hyperPar_full %>%
+  select(-ter, -sentence_id, -src_length_class) %>%
+  group_by(across())
+```
+
+
+```{r  variance decomposition full grid, warning=FALSE, include=FALSE, cache=TRUE}
+var_decomp_full <- 
+  lmer(ter ~ 
+        (1 | sentence_id) + 
+        (1 | learning_rate) +
+        (1 | seed) + 
+        (1 | decoder_dropout) +
+        (1 | decoder_dropout_hidden) +
+        (1 | encoder_dropout), 
+       data = data_hyperPar_full,
+       control = lmerControl(optimizer = "nloptwrap", calc.derivs = FALSE))
+```
+
+
+```{r ICC for full grid}
+ICC(var_decomp_full)
+```
+
+
+### An extended grid where the grid in 2 is extended with new hyperparamter values
+
+```{r load extended grid data, include=FALSE}
+data_hyperPar_extended <- 
+  readRDS("data/data_hyperparameter-marking_extended.rds") %>%
+  filter(delta_scheme == "(-0.5:0.5)") %>%
+  select(-system, -src_length, -delta_scheme)
+```
+  
+
+```{r show extended grid, eval=FALSE, include=FALSE}
+data_hyperPar_extended %>%
+  select(-ter, -sentence_id, -src_length_class, -seed) %>%
+  distinct()
+```
+
+```{r variance decomposition extended grid, warning=FALSE, include=FALSE, cache=TRUE}
+var_decomp_extended <- 
+  lmer(ter ~ 
+        (1 | sentence_id) + 
+        (1 | learning_rate) +
+        (1 | seed) + 
+        (1 | decoder_dropout) +
+        (1 | decoder_dropout_hidden) +
+        (1 | encoder_dropout), 
+       data = data_hyperPar_extended,
+       control = lmerControl(optimizer = "nloptwrap", calc.derivs = FALSE))
+```
+
+
+```{r ICC for extended grid}
+ICC(var_decomp_extended)
+```
+
+\newpage
+## ADDED: QUICK CHECK
+### partial grid
+```{r quick check: partial grid, warning=FALSE, include=TRUE, cache=TRUE}
+var_decomp_partial <- 
+  lmer(ter ~ 
+        (1 | sentence_id),
+       data = data_hyperPar,
+       control = lmerControl(optimizer = "nloptwrap", calc.derivs = FALSE))
+```
+
+
+```{r ICC for quick check on partial grid}
+ICC(var_decomp_partial)
+```
+
+### full grid
+```{r quick check: full grid, warning=FALSE, include=TRUE, cache=TRUE}
+var_decomp_partial <- 
+  lmer(ter ~ 
+        (1 | sentence_id),
+       data = data_hyperPar_full,
+       control = lmerControl(optimizer = "nloptwrap", calc.derivs = FALSE))
+```
+
+
+```{r ICC for quick check on full grid}
+ICC(var_decomp_partial)
+```

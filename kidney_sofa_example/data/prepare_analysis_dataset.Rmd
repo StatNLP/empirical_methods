@@ -1,0 +1,101 @@
+---
+title: "Gather Predication and Compile Data Set for Analysis"
+author: "Michael Hagmann"
+date: "3/1/2021"
+output: pdf_document
+---
+
+```{r, message=FALSE, include=FALSE}
+library(tidyverse)
+library(magrittr)
+library(glue) 
+library(ordinal)
+```
+
+
+```{r function: read prediction}
+read_prediction <- function(file, dir = "predictions/") 
+  as.numeric(readRDS(paste0(dir, file))[[1]])
+```
+
+```{r function: turn predictions to sofa values, include=FALSE}
+sofa_prediction <- function(threshold_model, target, raw_prediction) 
+{ 
+  new_data <- 
+    tibble(target     = ordered(target, levels = 0:4),
+           prediction = raw_prediction) 
+  
+  predict(threshold_model, newdata = new_data, type = "class")$fit %>%
+  as.character(.) %>%
+  as.numeric(.) 
+} 
+```
+
+
+
+```{r second training step: calc thresholds, include=FALSE}
+train_set <- 
+  readRDS("data/dataset-training_std.rds")["target"] %>%
+  mutate(target      = ordered(target, levels = 0:4),
+         pred_circ   = read_prediction("train_circular_model.rds"),
+         pred_nocirc = read_prediction("train_non_circular_model.rds"))
+
+thresholds_circ <-
+  clm(target ~ prediction, 
+      data = select(train_set, target, prediction = pred_circ))
+
+thresholds_nocirc <-
+  clm(target ~ prediction, 
+      data = select(train_set, target, prediction = pred_nocirc))
+```
+
+
+```{r calc sofa predictions on test set, include=FALSE}
+train_set <- 
+  readRDS("data/dataset-training_std.rds") %>%
+  mutate(sofa_circ   = 
+           sofa_prediction(
+             threshold_model = thresholds_circ, 
+             target          = target, 
+             raw_prediction  = read_prediction("train_circular_model.rds")),
+         sofa_nocirc =  
+           sofa_prediction(
+             threshold_model = thresholds_nocirc, 
+             target          = target, 
+             raw_prediction  = read_prediction("train_non_circular_model.rds"))) %T>%
+  saveRDS("train_set_with_sofa_predictions.rds")
+```
+
+
+```{r calc sofa predictions on test set, include=FALSE}
+test_set <- 
+  readRDS("data/dataset-test_nostd.rds") %>%
+  mutate(sofa_circ   = 
+           sofa_prediction(
+             threshold_model = thresholds_circ, 
+             target          = target, 
+             raw_prediction  = read_prediction("test_circular_model.rds")),
+         sofa_nocirc =  
+           sofa_prediction(
+             threshold_model = thresholds_nocirc, 
+             target          = target, 
+             raw_prediction  = read_prediction("test_non_circular_model.rds"))) %T>%
+  saveRDS("test_set_with_sofa_predictions.rds")
+```
+
+```{r calc sofa predictions on ablation set, include=FALSE}
+ablation_set <- 
+  readRDS("data/dataset-test_nostd.rds") %>%
+  mutate(bili = 0) %>%
+  mutate(sofa_circ   = 
+           sofa_prediction(
+             threshold_model = thresholds_circ, 
+             target          = target, 
+             raw_prediction  = read_prediction("ablation_circular_model.rds")),
+         sofa_nocirc =  
+           sofa_prediction(
+             threshold_model = thresholds_nocirc, 
+             target          = target, 
+             raw_prediction  = read_prediction("test_non_circular_model.rds"))) %T>%
+  saveRDS("ablation_set_with_sofa_predictions.rds")
+```
