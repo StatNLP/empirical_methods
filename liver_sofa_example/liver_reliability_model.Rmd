@@ -110,46 +110,21 @@ ICC_nested <- function(model) {
 ```
 
 
-
 ```{r read data, echo = FALSE}
 grid_data <- 
-  readRDS("data/reliability_gridsearch_results.rds")
+  readRDS("reliability_gridsearch_results.rds")
 ```
 
-TASK: Predict SOFA Score for liver based on training data without circular features.
-
-LEARNER: The system consist of two components. The first component is a Feed Forward 
-Neural Network which is trained to output a real valued score (called raw prediction) based
-on 44 physiological status variables. This network is trained with a L2-loss function.
-The second component is an ordinal regression model which is used to derive threshold values
-to map the raw score to 0, 1, 2, 3 or 4. The output of this mapping i called the 
-predicted sofa score and forms the basis of all further evaluations.
-
-RESEARCH QUESTION: Determine a quantification of hyperparameter influence on 
-summative evaluation metrics like corpus BLEU, Accuracy etc. 
-
-
-PROCEDURE: We identified a set of hyperparameters we would like to study and 
-defined a range of relevant values for each of them. We then choose 3 to 6 values 
-that reasonable cover this range for each of the chosen hyperparameters and trained the
-learner under each possible combination.
-
-The chosen hyperparameter an values are:
 
 ```{r show hyperparamters, echo=FALSE}
 summary(select(grid_data, -system, -accuracy))
 ```
 
 
-We than evaluate the trained models on a test set (see circularity analysis for details) and 
-calculated the accuracy for each of them. The results are briefly summarized by: 
-
 ```{r show accuracy, echo=FALSE}
 summary(select(grid_data, accuracy))
 ```
 
-To get a first impression let us plot univariate summarizations (mean and sd) for 
-each hyperparameter:
 
 ```{r liver_rel_model_fig1,  echo=FALSE, warning=FALSE, fig.height = 11.7, fig.width = 8.3, fig.align = "center"}
 data_plot <-
@@ -175,7 +150,6 @@ ggplot(data = data_plot,
 
 ```
 
-Now we calculate a random effect model to decompose the variance:
 
 ```{r estimate var component with lme4}
 mod_form <- 
@@ -192,9 +166,7 @@ var_decomp <-
 #  update(var_decomp, ~ . + (1 | hidden_number:hidden_size_max))
 ```
 
-And summarize the results:
 
 ```{r, message=FALSE}
 ICC_nested(var_decomp)
 ```
-

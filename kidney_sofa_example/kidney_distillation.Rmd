@@ -74,9 +74,9 @@ class_accuracy <-
 
 
 ```{r read data sets, include=FALSE}
-train_data <- readRDS("data/train_set_with_sofa_predictions.rds")
+train_data <- readRDS("train_set_with_sofa_predictions.rds")
 
-test_data <- readRDS("data/test_set_with_sofa_predictions.rds")
+test_data <- readRDS("test_set_with_sofa_predictions.rds")
 ```
 
 

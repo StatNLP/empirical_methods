@@ -1,0 +1,118 @@
+---
+title: 'Detecting Circularity with GAMs: An Exercise in R'
+author: 
+  - Michael Hagmann ^[hagmann@cl.uni-heidelberg.de]
+  - Stefan Riezler
+  
+date: '`r format(Sys.Date(), "%B %d, %Y")`'
+
+output:
+  pdf_document:
+    latex_engine: xelatex
+  bookdown::pdf_book: default
+    
+urlcolor: blue
+---
+
+
+```{r, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      cache.lazy = FALSE,
+                      dev = c("svglite", "pdf", "png"),
+                      dpi = 300,
+                      fig.path = 'figures/',
+                      fig.keep = "high")
+
+#added from: https://github.com/yihui/knitr-examples/blob/master/077-wrap-output.Rmd
+library(knitr)
+hook_output = knit_hooks$get('output')
+knit_hooks$set(output = function(x, options) {
+  # this hook is used only when the linewidth option is not NULL
+  if (!is.null(n <- options$linewidth)) {
+    x = knitr:::split_lines(x)
+    # any lines wider than n should be wrapped
+    if (any(nchar(x) > n)) x = strwrap(x, width = n)
+    x = paste(x, collapse = '\n')
+  }
+  hook_output(x, options)
+})
+```
+
+
+
+
+```{r, message=FALSE}
+library(tidyverse) # A collection of packages for data science. More about it on 
+                   # www.tidyverse.com
+library(magrittr)  # A package that provides pipe operators like %>%
+library(mgcv)      # A package written by Simon Wood that implements his 
+                   # (spline based) GAM specification.
+library(glue)      # A package that provides interpolated string functions.
+library(cowplot)
+library(ordinal)
+```
+
+
+```{r function: read prediction}
+read_prediction <- function(file, dir = "predictions/") 
+  as.numeric(readRDS(paste0(dir, file))[[1]])
+```
+
+
+
+```{r second training step: calc thresholds, include=FALSE, cache = TRUE}
+train_set <- 
+  readRDS("data/dataset-training_std.rds")["target"] %>%
+  mutate(target      = ordered(target, levels = 0:4),
+         pred_circ   = read_prediction("train_circular_model.rds"),
+         pred_nocirc = read_prediction("train_non_circular_model.rds"))
+
+thresholds_circ <-
+  clm(target ~ prediction, 
+      data = select(train_set, target, prediction = pred_circ))
+
+
+learned_thresholds_circ <- coef(thresholds_circ)[-5] / coef(thresholds_circ)[5]
+
+thresholds_nocirc <-
+  clm(target ~ prediction, 
+      data = select(train_set, target, prediction = pred_nocirc))
+
+learned_thresholds_nocirc <- coef(thresholds_nocirc)[-5] / coef(thresholds_nocirc)[5]
+```
+
+
+
+```{r calc sofa predictions on test set, include=FALSE}
+test_set <- 
+  readRDS("data/dataset-test_nostd.rds") %>%
+  mutate(target      = ordered(target, levels = 0:4),
+         pred_circ   =  read_prediction("test_circular_model.rds"),
+         pred_nocirc =  read_prediction("test_non_circular_model.rds"))
+```
+
+
+Distribution of model score by target class:
+```{r kidney_preoutput_circ_fig1 , fig.height = 3.9, fig.width = 4.1, fig.align = "center"}
+ggplot() +
+  theme_minimal_hgrid(font_size = 12) +
+  geom_jitter(data = test_set, aes(x = pred_circ, y = target), alpha = .01, height = .1) +
+  geom_vline(aes(xintercept = learned_thresholds_circ), linetype = "dotted") +
+  ylab("target") +
+  xlab("prediction") +
+  scale_x_continuous(breaks = learned_thresholds_circ,
+                     labels = (c("0|1", "1|2", "2|3", "3|4")))
+```
+
+
+```{r kidney_preoutput_noncirc_fig2 , fig.height = 3.9, fig.width = 4.1, fig.align = "center"}
+ggplot() +
+  theme_minimal_hgrid(font_size = 12) +
+  geom_jitter(data = test_set, aes(x = pred_nocirc, y = target), alpha = .01, height = .1) +
+  geom_vline(aes(xintercept = learned_thresholds_nocirc), linetype = "dotted") +
+  ylab("target") +
+  xlab("prediction") +
+  scale_x_continuous(breaks = learned_thresholds_nocirc,
+                     labels = (c("0|1", "1|2", "2|3", "3|4")))
+```
+

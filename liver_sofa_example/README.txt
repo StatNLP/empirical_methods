@@ -1,10 +1,10 @@
 This directory contains all files need to rerun the analyses related to the 
 liver sofa example presented in the book.
 
-The most important files are the two R Markdown files (we recommend using RStudio
+The most important files are the two R Markdown files (we recommed using RStudio
 to open them):
 [1] liver_circularity.Rmd
-[2] liver_distillation.Rmd
+[2] liver_distill.Rmd
 [3] liver_reliability_model.Rmd
 
 which store the necessary R code to replicate the results presented
@@ -14,7 +14,7 @@ in:
 [2] Chapter 2.4.3 (Circularity in Machine Learning Prediction)
 [3] Chapter 3.3.3 (Reliability of Model Prediction Performance)
 
-The directory data/ contains the raw data (train and test) needed to train the
+The directory data/ containes the raw data (train and test) needed to train the
 DNN defined in /train-pytorch. In order to train this model from scratch you 
 need to run train-pytorch/train_network.py. This scripts trains the DNN,
 generates predictions (for test and train data) and also conducts the ablation 
@@ -26,4 +26,4 @@ which are used for analysis.
 
 REMARK: If you knit the Rmd files you will obtain a pdf with the same name as
 the script along with the figures in png,svg and pdf stored in figures/. The
-computationally more expansive sections are cached in *_cache/ directories.
+computationally more expansiv sections are chached in *_cache/ directories.

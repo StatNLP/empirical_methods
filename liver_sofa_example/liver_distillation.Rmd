@@ -74,26 +74,10 @@ class_accuracy <-
 
 
 ```{r read data sets, include=FALSE}
-train_data <- readRDS("data/train_set_with_sofa_predictions.rds")
+train_data <- readRDS("train_set_with_sofa_predictions.rds")
 
-test_data <- readRDS("data/test_set_with_sofa_predictions.rds")
+test_data <- readRDS("test_set_with_sofa_predictions.rds")
 ```
-
-
-Learner: Feed forward neural network with seven layers (number of neurons per 
-layer: 128, 161, 203 , 256, 203 , 161, 128) and relu activation function. 
-The network was trained with SGD (batch size 64) and learning rate .01 for 5 
-epochs and a dropoutrate of .2 for inter hidden layer weights. All other 
-optimizer settings are default values of pyTorch's SGD optimizer. The objective 
-function was MSE. 
-
-In a second step thresholds to turn the network output (score) 
-into class predictions were learned . For this purpose a ordinal regression model 
-was trained (R package "ordinal"). 
-
-Train set size: `r nrow(train_data)` measurement points.
-Test set size: `r nrow(test_data)` measurement points.
-
 
 \newpage
 ## PERFORMANCE EVALUATION
@@ -148,9 +132,6 @@ Confusion Matrix:
 ```{r, echo=FALSE}
 xtabs(~ target + sofa_nocirc, data = test_data)
 ```
-
-
-
 
 
 \newpage
@@ -467,11 +448,10 @@ par(mfrow = c(1,1), mar = c(5,4,4,2))
 
 
 
-
 \newpage
 ## ABLATION STUDY I (REMOVE CIRCULAR FEATURE)
 ```{r ablation data set, include=FALSE}
-ablation_data <- readRDS("data/ablation_set_with_sofa_predictions.rds")
+ablation_data <- readRDS("ablation_set_with_sofa_predictions.rds")
 ```
 
 
@@ -498,9 +478,6 @@ Confusion Matrix:
 ```{r, echo=FALSE}
 xtabs(~ target + sofa_nocirc, data = ablation_data)
 ```
-
-
-
 
 
 

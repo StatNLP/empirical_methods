@@ -68,10 +68,6 @@ powerSet <- function(set) {
 train_data <- readRDS("data/dataset-train_nostd.rds")
 ```
 
-Train set size: `r nrow(train_data)` measurement points.
-
-
-
 
 \newpage
 ## SEARCH
@@ -151,10 +147,6 @@ legend(legend = c("Theoretical", "Estimated"),
        bg     = "white",
        x      = "topleft")
 ```
-
-
-
-
 
 
 \newpage

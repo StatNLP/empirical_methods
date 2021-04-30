@@ -1,0 +1,1098 @@
+---
+title: 'Effect of circular features on model training for IR Example'
+author: 
+  - Michael Hagmann ^[hagmann@cl.uni-heidelberg.de]
+  - Stefan Riezler
+  
+date: '`r format(Sys.Date(), "%B %d, %Y")`'
+
+output:
+  pdf_document:
+    latex_engine: xelatex
+  bookdown::pdf_book: default
+    
+urlcolor: blue
+---
+
+
+```{r, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      cache.lazy = FALSE,
+                      dev = c("svglite", "pdf", "png"),
+                      dpi = 300,
+                      fig.path = 'figures/',
+                      fig.keep = "high")
+
+#added from: https://github.com/yihui/knitr-examples/blob/master/077-wrap-output.Rmd
+library(knitr)
+hook_output = knit_hooks$get('output')
+knit_hooks$set(output = function(x, options) {
+  # this hook is used only when the linewidth option is not NULL
+  if (!is.null(n <- options$linewidth)) {
+    x = knitr:::split_lines(x)
+    # any lines wider than n should be wrapped
+    if (any(nchar(x) > n)) x = strwrap(x, width = n)
+    x = paste(x, collapse = '\n')
+  }
+  hook_output(x, options)
+})
+
+```
+
+
+
+```{r, include=FALSE}
+library(tidyverse)
+library(magrittr)
+library(glue)
+library(mgcv)
+library(glmnet)
+library(parallel)
+```
+
+
+
+```{r function: powerSet, include=FALSE}
+#When you want to reproduce the examples, you have to run this code chunk in advance!!
+powerSet <- function(set) {
+  
+    apply(X      = rep(list(c(T,F)), length = length(set)) %>% expand.grid(.),
+          MARGIN = 1,
+          FUN    = function(...) set[...])
+}
+```
+
+
+```{r function: foldId, include=FALSE}
+fold_id <- function(k = 10, id_var) {
+  
+  id_var = train_data$queryId
+  
+  nEntities <- length(unique(id_var))
+  if (nEntities %% k != 0) warning("Number of id entities is not a multiple of k!")
+  
+  pi_id_var <- sample(unique(id_var)) # permutate id_var
+  map_foldId <- setNames(nm = sample(unique(id_var)), object = (1:nEntities) %% k + 1) 
+  
+  return(map_foldId[id_var])
+}
+```
+
+
+```{r function: searchModel, include=FALSE}
+searchModel <- function(data, response, features, alpha, fold_ids) {
+  
+  ls_model <- 
+    lapply(X   = alpha,
+             FUN = function(alpha, ...) cv.glmnet(alpha = alpha, ...),
+             #pars for cv.glmnet other than alpha
+             x      = data[features] %>% as.matrix(.),
+             y      = train_data[[response]], 
+             family = "binomial",
+             foldid = fold_ids,
+             type.measure = "deviance", #alternative choices: "class" or "auc"
+             #pars to mclapply
+             )#mc.cores = min(length(alpha), 16))
+  
+  #select alpha with lowest deviance
+  alpha_lowest_dev <- 
+    sapply(X   = ls_model,
+           FUN = function(model) min(deviance(model$glmnet.fit)))
+         
+  return(ls_model[[which.min(alpha_lowest_dev)]])
+  }
+```
+
+
+
+```{r function: myPredict, include=FALSE}
+myPredict <- function(model, dataF) {
+  predict(model, 
+          newx = as.matrix(dataF), 
+          s    = "lambda.min", 
+          type = "response")[,1] 
+}
+```
+
+
+```{r Def: F1 score, include=FALSE}
+f1_score <- function(score, labels, threshold = .5) {
+  #labels: {0,1}: class labels where 1 refers to positive and zero to negative
+  #score:  [0,1]: predictive score
+  #threshold: (0,1): a single number that is used to split the score in classes
+  
+  predicted_class <- as.numeric(score > threshold ) 
+  confusion_matrix <- table(predicted = predicted_class, true=labels)
+  tp <- tryCatch(confusion_matrix["1","1"], error = function(e) return(0))
+  fp <- tryCatch(confusion_matrix["1","0"], error = function(e) return(0))
+  fn <- tryCatch(confusion_matrix["0","1"], error = function(e) return(0))
+  
+  #f1 = tp / (tp + (1 / 2) * (fp + fn))
+  return( tp / (tp + (1 / 2) * (fp + fn)) )
+} 
+```
+
+
+```{r train glmnet models, cache=TRUE, include=FALSE}
+train_data <- 
+  readRDS("data/ir_trainset.rds") %>%
+  dplyr::mutate(relevance_dicho  = as.numeric(relevance != 0),
+                cited_inventor_num = as.numeric(cited_inventor) - 1,
+                cited_examiner_num = as.numeric(cited_examiner) - 1,
+                cited_family_num   = as.numeric(cited_family) - 1)
+
+
+fold_ids = fold_id(id_var = train_data$queryId)
+
+features_base       <- c("score_tfIdf", "score_neural")
+features_addCit_i   <- c(features_base, "cited_inventor_num")
+features_addCit_ie  <- c(features_addCit_i, "cited_examiner_num")
+features_addCit_ief <- c(features_addCit_ie, "cited_family_num")
+
+base_model <- 
+  searchModel(data = train_data, 
+              response = "relevance_dicho",
+              features = features_base,
+              fold_ids = fold_ids,
+              alpha = seq(from = 0, to = 1,  by = .1))
+
+
+features_addCit_i <- c(features_base , "cited_inventor_num")
+model_addCit_i  <- 
+  searchModel(data = train_data, 
+            response = "relevance_dicho",
+            features = features_addCit_i,
+            fold_ids = fold_ids,
+            alpha = seq(from = 0, to = 1,  by = .1))
+
+model_addCit_ie  <- 
+  searchModel(data = train_data, 
+            response = "relevance_dicho",
+            features = features_addCit_ie,
+            fold_ids = fold_ids,
+            alpha = seq(from = 0, to = 1,  by = .1))
+
+model_addCit_ief  <- 
+  searchModel(data = train_data, 
+            response = "relevance_dicho",
+            features = features_addCit_ief,
+            fold_ids = fold_ids,
+            alpha = seq(from = 0, to = 1,  by = .1))
+
+```
+
+
+
+## F1 on training data
+```{r f1 for training data, include=FALSE}
+f1_train <- 
+  train_data %>%
+    mutate(
+      score_b    = myPredict(base_model,       .[features_base]       %>% as.matrix(.)),
+      score_bi   = myPredict(model_addCit_i,   .[features_addCit_i]   %>% as.matrix(.)),
+      score_bie  = myPredict(model_addCit_ie,  .[features_addCit_ie]  %>% as.matrix(.)),
+      score_bief = myPredict(model_addCit_ief, .[features_addCit_ief] %>% as.matrix(.))) %>%
+  select(queryId, documentId, relevance, relevance_dicho, starts_with("score_b")) %>%
+  summarize(f1_b    = f1_score(score_b, labels = relevance_dicho),
+            f1_bi   = f1_score(score_bi, labels = relevance_dicho),
+            f1_bie  = f1_score(score_bie, labels = relevance_dicho),
+            f1_bief = f1_score(score_bief, labels = relevance_dicho))
+```
+
+
+```{r, echo=FALSE}
+print(f1_train)
+```
+
+
+## F1 on test data
+```{r read test set , include=FALSE}
+test_data <- 
+  readRDS("ir_testset.rds") %>%
+    mutate(relevance_dicho  = as.numeric(relevance != 0),
+           cited_inventor_num = as.numeric(cited_inventor) - 1,
+           cited_examiner_num = as.numeric(cited_examiner) - 1,
+           cited_family_num   = as.numeric(cited_family) - 1) %>%
+    mutate(
+      score_b    = myPredict(base_model,       .[features_base]       %>% as.matrix(.)),
+      score_bi   = myPredict(model_addCit_i,   .[features_addCit_i]   %>% as.matrix(.)),
+      score_bie  = myPredict(model_addCit_ie,  .[features_addCit_ie]  %>% as.matrix(.)),
+      score_bief = myPredict(model_addCit_ief, .[features_addCit_ief] %>% as.matrix(.)))
+```
+
+```{r f1 for test data, include=FALSE}
+f1_test <- 
+  test_data %>%
+  select(queryId, documentId, relevance, relevance_dicho, starts_with("score_b")) %>%
+  summarize(f1_b    = f1_score(score_b, labels = relevance_dicho),
+            f1_bi   = f1_score(score_bi, labels = relevance_dicho),
+            f1_bie  = f1_score(score_bie, labels = relevance_dicho),
+            f1_bief = f1_score(score_bief, labels = relevance_dicho))
+```
+
+
+```{r, echo=FALSE}
+print(f1_test)
+```
+\newpage
+
+
+## BASELINE vs EXTENDED Model (students: all features)
+### BASELINE
+```{r student of baseline teacher trained with all features, message=FALSE, warning=FALSE, echo=FALSE}
+student_b_all <- 
+  gam(score_b ~ s(score_tfIdf) + s(score_neural) + cited_inventor + cited_examiner + cited_family,
+      data = test_data,
+      family = binomial)
+
+summary(student_b_all)
+```
+
+\newpage
+### EXTENDED MODEL
+```{r student of extended teacher trained with all features, message=FALSE, warning=FALSE, echo=FALSE}
+student_bief_all <- 
+  gam(score_bief ~ s(score_tfIdf) + s(score_neural) + cited_inventor + cited_examiner + cited_family,
+      data = test_data,
+      family = binomial)
+
+summary(student_bief_all) 
+```
+
+
+\newpage
+```{r ir_distill_fig1, echo = FALSE, fig.height = 7.8, fig.width = 8.3, fig.align = "center", warning=FALSE}
+pseudoSmoother_bief <- function(x, model = student_bief_all) {
+  #calculate estimated group means
+  plogis((coef(model)[1] + c(0, coef(model)[-1]))[round(x) + 1])
+}
+
+pseudoSmoother_b <- function(x, model = student_b_all) {
+   #calculate estimated group means
+  plogis((coef(model)[1] + c(0, coef(model)[-1]))[round(x) + 1])
+}
+
+par(mfrow = c(3,2), mar=c(2,3,2,3), oma = c(1,1,1,1))
+    plot.function(pseudoSmoother_b, 
+      from = -.49, 
+      to   = 3.49, 
+      n    = 1001, 
+      lty  = "solid",
+      xlim = c(-.49, 3.49),
+      ylim = c(0,1),
+      xaxt = "n",
+      yaxt = "n",
+      main = glue("Teacher without Citation Feature (F1={round(f1_test$f1_b, 3)})"),
+      ylab = "Pseudo Feature Shape", 
+      xlab = "citation")
+    axis(1, at = 0:3, labels = c("none", "inventor", "examiner", "family"))
+    axis(2, at = 0:3, labels = 0:3)
+    text(labels = "not accessible during teacher training",
+         col    = "gray",
+         x      = mean(c(-.49, 3.49)),
+         y      = mean(c(0,1)),
+         adj    = .5)
+    
+   plot.function(pseudoSmoother_bief, 
+      from = -.49, 
+      to   = 3.49, 
+      n    = 1001, 
+      lty  ="solid",
+      xlim = c(-.49, 3.49),
+      ylim = c(0,1),
+      xaxt = "n",
+      yaxt = "n",
+      main = glue("Teacher with Citation Feature (F1={round(f1_test$f1_bief, 3)})"),
+      ylab = "", 
+      xlab = "citation")
+   axis(1, at = 0:3, labels = c("none", "inventor", "examiner", "family"))
+   axis(2, at = 0:3, labels = 0:3)
+   mtext("citation", side = 4, line = 1)
+  
+  plot(student_b_all,
+       trans = plogis,
+       shift = coef(student_b_all)[1],
+       se   = FALSE, 
+       #rug  = TRUE,
+       select = 1,
+       main = "",
+       ylab = "", 
+       xlab = "",
+       ylim = c(-.05,1),
+       xlim = c(0,1),
+       yaxt = "n")
+  axis(2, at = 0:3, labels = 0:3)
+  rug(unique(test_data$score_tfIdf))
+
+  plot(student_bief_all, 
+       trans = plogis,
+       shift = coef(student_bief_all)[1],
+       se   = FALSE, 
+       #rug  = TRUE, 
+       select = 1,
+       main = "",
+       ylab = "", 
+       yaxt = "n",
+       xlab = "",
+       ylim = c(-.05, 1),
+       xlim = c(0, 1))
+  axis(2, at = 0:3, labels = 0:3)
+  rug(unique(test_data$score_tfIdf))
+  
+  ## Allow a second plot on the same graph
+  par(new=TRUE)
+
+## Plot the second plot and put axis scale on right
+  plot(student_bief_all, 
+       trans = plogis,
+       shift = coef(student_bief_all)[1],
+       se   = FALSE, 
+       select = 1,
+       col="black",
+       lty = "dashed",
+       axes=FALSE,
+       ylim = c(0, .006),
+       xlim = c(0, 1))
+  axis(4, ylim = c(0, .006), at = c(0, .006))
+  legend(legend = c("same scale (left y-axis)", "magnified (right y-axis)"), 
+         lty    = c("solid", "dashed"),
+         bty    = "o",
+         bg     = "white",
+         x      = "topright")
+  
+  
+  
+  mtext("tf-Idf", side = 4, line = 1)
+   
+  plot(student_b_all,
+       trans = plogis,
+       shift = coef(student_b_all)[1],
+       se   = FALSE, 
+       #rug  = TRUE,
+       select = 2,
+       main = "",
+       ylab = "", 
+       xlab = "",
+       ylim = c(-.05,1),
+       xlim = c(-18,10),
+       yaxt = "n")
+  axis(2, at = 0:3, labels = 0:3)
+  rug(unique(test_data$score_neural))
+
+
+  plot(student_bief_all,
+       shift = coef(student_bief_all)[1],
+       trans = plogis,
+       se   = FALSE, 
+       #rug  = TRUE, 
+       select = 2,
+       main = "",
+       ylab = "", 
+       yaxt = "n",
+       xlab = "",
+       ylim = c(-.05, 1),
+       xlim = c(-18, 10))
+  axis(2, at = 0:3, labels = 0:3)
+  rug(unique(test_data$score_neural))
+  mtext("neural", side = 4, line = 1)
+   
+par(mfrow = c(1,1), mar = c(5,4,4,2))
+```
+
+
+
+\newpage
+## NULLIFICATION
+### TEACHER: extended model, Student: no citation
+```{r student of extended teacher trained without citation, message=FALSE, warning=FALSE, echo=FALSE}
+student_bief_nocite <- 
+  gam(score_bief ~ s(score_tfIdf) + s(score_neural),
+      data = test_data,
+      family = binomial)
+
+summary(student_bief_nocite)
+```
+
+
+
+
+\newpage
+```{r ir_distill_fig2, echo = FALSE, fig.height = 7.8, fig.width = 8.3, fig.align = "center", warning=FALSE}
+pseudoSmoother_bief <- function(x, model = student_bief_all) {
+  #calculate estimated group means
+  plogis((coef(model)[1] + c(0, coef(model)[-1]))[round(x) + 1])
+}
+
+dev_nocite   <- round(summary(student_bief_nocite)$dev.expl * 100)
+dev_all <- round(summary(student_bief_all)$dev.expl * 100)
+
+par(mfrow = c(3,2), mar=c(2,3,2,3), oma = c(1,1,1,1))
+    plot.function(pseudoSmoother_b, 
+      from = -.49, 
+      to   = 3.49, 
+      n    = 1001, 
+      type = "n",
+      xlim = c(-.49, 3.49),
+      ylim = c(0,1),
+      xaxt = "n",
+      yaxt = "n",
+      main = glue("Student without Citation Feature (D\U00B2={dev_nocite}%)"),
+      ylab = "", 
+      xlab = "")
+    axis(1, at = 0:3, labels = c("none", "inventor", "examiner", "family"))
+    axis(2, at = 0:3, labels = 0:3)
+    text(labels = "not included in student model",
+         x      = mean(c(-.49, 3.49)),
+         y      = mean(c(0,1)),
+         adj    = .5)
+    
+   plot.function(pseudoSmoother_bief, 
+      from = -.49, 
+      to   = 3.49, 
+      n    = 1001, 
+      lty  ="solid",
+      xlim = c(-.49, 3.49),
+      ylim = c(0,1),
+      xaxt = "n",
+      yaxt = "n",
+      main = glue("Student with Citation Feature (D\U00B2={dev_all}%)"),
+      ylab = "", 
+      xlab = "citation")
+   axis(1, at = 0:3, labels = c("none", "inventor", "examiner", "family"))
+   axis(2, at = 0:3, labels = 0:3)
+   mtext("citation", side = 4, line = 1)
+  
+  plot(student_b_all,
+       trans = plogis,
+       shift = coef(student_b_all)[1],
+       se   = FALSE, 
+       #rug  = TRUE,
+       select = 1,
+       main = "",
+       ylab = "", 
+       xlab = "",
+       ylim = c(-.05,1),
+       xlim = c(0,1),
+       yaxt = "n")
+  axis(2, at = 0:3, labels = 0:3)
+  rug(unique(test_data$score_tfIdf))
+
+  plot(student_bief_all, 
+       trans = plogis,
+       shift = coef(student_bief_all)[1],
+       se   = FALSE, 
+       #rug  = TRUE, 
+       select = 1,
+       main = "",
+       ylab = "", 
+       yaxt = "n",
+       xlab = "",
+       ylim = c(-.05, 1),
+       xlim = c(0, 1))
+  axis(2, at = 0:3, labels = 0:3)
+  rug(unique(test_data$score_tfIdf))
+  
+  ## Allow a second plot on the same graph
+  par(new=TRUE)
+
+## Plot the second plot and put axis scale on right
+  plot(student_bief_all, 
+       trans = plogis,
+       shift = coef(student_bief_all)[1],
+       se   = FALSE, 
+       select = 1,
+       col="black",
+       lty = "dashed",
+       axes=FALSE,
+       ylim = c(0, .006),
+       xlim = c(0, 1))
+  axis(4, ylim = c(0, .006), at = c(0, .006))
+  legend(legend = c("same scale (left y-axis)", "magnified (right y-axis)"), 
+         lty    = c("solid", "dashed"),
+         bty    = "o",
+         bg     = "white",
+         x      = "topright")
+  
+  
+  
+  mtext("tf-Idf", side = 4, line = 1)
+   
+  plot(student_b_all,
+       trans = plogis,
+       shift = coef(student_b_all)[1],
+       se   = FALSE, 
+       #rug  = TRUE,
+       select = 2,
+       main = "",
+       ylab = "", 
+       xlab = "",
+       ylim = c(-.05,1),
+       xlim = c(-18,10),
+       yaxt = "n")
+  axis(2, at = 0:3, labels = 0:3)
+  rug(unique(test_data$score_neural))
+
+
+  plot(student_bief_all,
+       shift = coef(student_bief_all)[1],
+       trans = plogis,
+       se   = FALSE, 
+       #rug  = TRUE, 
+       select = 2,
+       main = "",
+       ylab = "", 
+       yaxt = "n",
+       xlab = "",
+       ylim = c(-.05, 1),
+       xlim = c(-18, 10))
+  axis(2, at = 0:3, labels = 0:3)
+  rug(unique(test_data$score_neural))
+  mtext("neural", side = 4, line = 1)
+   
+par(mfrow = c(1,1), mar = c(5,4,4,2))
+```
+
+
+
+
+
+
+
+
+\newpage
+## SEARCH FOR CIRCULARITY
+```{r feature list, include=FALSE}
+feature_list <- 
+  c("s(score_tfIdf)", "s(score_neural)", 
+    "cited_inventor", "cited_examiner", "cited_family")
+```
+
+
+### BASELINE SYSTEM (without circular features)
+```{r b model score GAM search, cache=TRUE, include=FALSE, eval=TRUE}
+target <- "score_b"
+
+fitted_models_b <-
+  #generate the power set of feature_list, and remove the void set 
+  powerSet(feature_list)[-(2^length(feature_list))] %>%
+  #build the symbolic model description  
+  sapply(., function(...) glue("{target}~{glue_collapse(..., sep='+')}")) %>%
+  #fit the models to data, and extract key statistics
+  tibble(formula_str = .,
+         models      = lapply(X = .,
+                              FUN  = function(m_str,...) gam(as.formula(m_str),  family = binomial, ...),
+                              data = test_data[c(target, str_replace(feature_list, "(?:s[(])(.*)(?:[)])", "\\1"))]),
+         data_fit    = floor(sapply(models, function(m) summary(m)$dev.expl) * 100),
+         complexity  = sapply(models, function(...) attr(logLik(...), 'df'))) %>%
+  #Sort the models so that we can find models that replicate the data well.
+  #For this models data_fit should be approximately 100.
+  arrange(desc(data_fit), complexity)
+```
+
+#### Top Ten
+```{r top ten for b system, echo=FALSE}
+head(fitted_models_b[,-2])
+```
+
+#### selected model
+```{r best found inspecting model for b system, echo=FALSE}
+summary(fitted_models_b$models[[1]])
+```
+\newpage
+
+
+### BIEF SYSTEM (with circular features)
+```{r bief model score GAM search, cache=TRUE, include=FALSE, eval=TRUE}
+target <- "score_bief"
+
+fitted_models_bief <-
+  #generate the power set of feature_list, and remove the void set 
+  powerSet(feature_list)[-(2^length(feature_list))] %>%
+  #build the symbolic model description  
+  sapply(., function(...) glue("{target}~{glue_collapse(..., sep='+')}")) %>%
+  #fit the models to data, and extract key statistics
+  tibble(formula_str = .,
+         models      = lapply(X = .,
+                              FUN  = function(m_str,...) gam(as.formula(m_str), family = binomial, ...),
+                              data = test_data[c(target, str_replace(feature_list, "(?:s[(])(.*)(?:[)])", "\\1"))]),
+         data_fit    = floor(sapply(models, function(m) summary(m)$dev.expl) * 100),
+         complexity  = sapply(models, function(...) attr(logLik(...), 'df'))) %>%
+  #Sort the models so that we can find models that replicate the data well.
+  #For this models data_fit should be approximately 100.
+  arrange(desc(data_fit), complexity)
+```
+
+
+### Top Ten
+```{r top ten for bief system, echo=FALSE}
+head(fitted_models_bief[,-2])
+```
+
+
+### selcted model
+```{r best found inspecting model for bief system, echo=FALSE}
+summary(fitted_models_bief$models[[1]])
+```
+
+
+\newpage
+## ABLATION TEST I: REMOVE CITATION INFORMATION (SET ALL VALUES TO ZERO)
+
+```{r predications on ablation data I, include=FALSE}
+f1_ablation_circ <- 
+    train_data %>%
+  mutate(cited_inventor_num = 0,
+         cited_examiner_num = 0,
+         cited_family_num   = 0) %>%
+    mutate(
+      score_b    = myPredict(base_model,       .[features_base]       %>% as.matrix(.)),
+      score_bi   = myPredict(model_addCit_i,   .[features_addCit_i]   %>% as.matrix(.)),
+      score_bie  = myPredict(model_addCit_ie,  .[features_addCit_ie]  %>% as.matrix(.)),
+      score_bief = myPredict(model_addCit_ief, .[features_addCit_ief] %>% as.matrix(.))) %>%
+  select(queryId, documentId, relevance, relevance_dicho, starts_with("score_b")) %>%
+  summarize(f1_b    = f1_score(score_b, labels = relevance_dicho),
+            f1_bi   = f1_score(score_bi, labels = relevance_dicho),
+            f1_bie  = f1_score(score_bie, labels = relevance_dicho),
+            f1_bief = f1_score(score_bief, labels = relevance_dicho))
+```
+
+
+```{r, echo=FALSE}
+print(f1_ablation_circ)
+```
+
+```{r summarize scores for ablation I, echo=FALSE}
+train_data %>%
+  mutate(cited_inventor_num = 0,
+         cited_examiner_num = 0,
+         cited_family_num   = 0) %>%
+    mutate(
+      score_b    = myPredict(base_model,       .[features_base]       %>% as.matrix(.)),
+      score_bi   = myPredict(model_addCit_i,   .[features_addCit_i]   %>% as.matrix(.)),
+      score_bie  = myPredict(model_addCit_ie,  .[features_addCit_ie]  %>% as.matrix(.)),
+      score_bief = myPredict(model_addCit_ief, .[features_addCit_ief] %>% as.matrix(.))) %>%
+  select(starts_with("score_b")) %>%
+  summary(.)
+```
+\newpage
+
+
+## ABLATION TEST II: REMOVE ALL NON-CIRCULAR INFORMATION (SET ALL VALUES TO ZERO)
+
+```{r predications on ablation data II, include=FALSE}
+f1_ablation_noncirc <- 
+  train_data %>%
+  mutate(score_tfIdf = 0,
+         score_neural = 0) %>%
+    mutate(
+      score_b    = myPredict(base_model,       .[features_base]       %>% as.matrix(.)),
+      score_bi   = myPredict(model_addCit_i,   .[features_addCit_i]   %>% as.matrix(.)),
+      score_bie  = myPredict(model_addCit_ie,  .[features_addCit_ie]  %>% as.matrix(.)),
+      score_bief = myPredict(model_addCit_ief, .[features_addCit_ief] %>% as.matrix(.))) %>%
+  select(queryId, documentId, relevance, relevance_dicho, starts_with("score_b")) %>%
+    summarize(f1_b    = f1_score(score_b, labels = relevance_dicho),
+            f1_bi   = f1_score(score_bi, labels = relevance_dicho),
+            f1_bie  = f1_score(score_bie, labels = relevance_dicho),
+            f1_bief = f1_score(score_bief, labels = relevance_dicho))
+```
+
+```{r, echo=FALSE}
+print(f1_ablation_noncirc)
+```
+
+```{r summarize scores for ablation II, echo=FALSE}
+train_data %>%
+  mutate(score_tfIdf = 0,
+         score_neural = 0) %>%
+    mutate(
+      score_b    = myPredict(base_model,       .[features_base]       %>% as.matrix(.)),
+      score_bi   = myPredict(model_addCit_i,   .[features_addCit_i]   %>% as.matrix(.)),
+      score_bie  = myPredict(model_addCit_ie,  .[features_addCit_ie]  %>% as.matrix(.)),
+      score_bief = myPredict(model_addCit_ief, .[features_addCit_ief] %>% as.matrix(.))) %>%
+  select(starts_with("score_b")) %>%
+  summary(.)
+```
+
+
+\newpage
+## SHOW TEACHER MODELS (SYSTEMS)
+
+### BASELINE
+```{r, echo=FALSE}
+coef(base_model, s=base_model$lambda.min)
+```
+
+
+### BIEF MODEL (has access to all features)
+```{r, echo=FALSE}
+coef(model_addCit_ief, s=model_addCit_ief$lambda.min)
+```
+
+
+\newpage
+## PARTIAL CIRCULAR TEACHER (BIE MODEL)
+```{r students of BIE-teacher, message=FALSE, warning=FALSE, echo=FALSE}
+student_bie_all <- 
+  gam(score_bie ~ s(score_tfIdf) + s(score_neural) + cited_inventor + cited_examiner + cited_family,
+      data = test_data,
+      family = binomial)
+
+student_bie_nocite <- 
+  gam(score_bie ~ s(score_tfIdf) + s(score_neural),
+      data = test_data,
+      family = binomial)
+```
+
+
+
+```{r ir_distill_fig3, echo = FALSE, fig.height = 7.8, fig.width = 8.3, fig.align = "center", warning=FALSE}
+pseudoSmoother_bie <- function(x, model = student_bie_all) {
+  #calculate estimated group means
+  plogis((coef(model)[1] + c(0, coef(model)[-1]))[round(x) + 1])
+}
+
+pseudoSmoother_b <- function(x, model = student_b_all) {
+   #calculate estimated group means
+  plogis((coef(model)[1] + c(0, coef(model)[-1]))[round(x) + 1])
+}
+
+par(mfrow = c(3,2), mar=c(2,3,2,3), oma = c(1,1,1,1))
+    plot.function(pseudoSmoother_b, 
+      from = -.49, 
+      to   = 3.49, 
+      n    = 1001, 
+      lty  = "solid",
+      xlim = c(-.49, 3.49),
+      ylim = c(0,1),
+      xaxt = "n",
+      yaxt = "n",
+      main = glue("Teacher without Citation Feature (F1={round(f1_test$f1_b, 3)})"),
+      ylab = "Pseudo Feature Shape", 
+      xlab = "citation")
+    axis(1, at = 0:3, labels = c("none", "inventor", "examiner", "family"))
+    axis(2, at = 0:3, labels = 0:3)
+    text(labels = "not accessible during teacher training",
+         col    = "gray",
+         x      = mean(c(-.49, 3.49)),
+         y      = mean(c(0,1)),
+         adj    = .5)
+    
+   plot.function(pseudoSmoother_bie, 
+      from = -.49, 
+      to   = 3.49, 
+      n    = 1001, 
+      lty  ="solid",
+      xlim = c(-.49, 3.49),
+      ylim = c(0,1),
+      xaxt = "n",
+      yaxt = "n",
+      main = glue("Teacher with Inventor and Examiner Feature (F1={round(f1_test$f1_bie, 3)})"),
+      ylab = "", 
+      xlab = "citation")
+   axis(1, at = 0:3, labels = c("none", "inventor", "examiner", "family"))
+   axis(2, at = 0:3, labels = 0:3)
+   mtext("citation", side = 4, line = 1)
+  
+  plot(student_b_all,
+       trans = plogis,
+       shift = coef(student_b_all)[1],
+       se   = FALSE, 
+       #rug  = TRUE,
+       select = 1,
+       main = "",
+       ylab = "", 
+       xlab = "",
+       ylim = c(-.05,1),
+       xlim = c(0,1),
+       yaxt = "n")
+  axis(2, at = 0:3, labels = 0:3)
+  rug(unique(test_data$score_tfIdf))
+
+  plot(student_bie_all, 
+       trans = plogis,
+       shift = coef(student_bie_all)[1],
+       se   = FALSE, 
+       #rug  = TRUE, 
+       select = 1,
+       main = "",
+       ylab = "", 
+       yaxt = "n",
+       xlab = "",
+       ylim = c(-.05, 1),
+       xlim = c(0, 1))
+  axis(2, at = 0:3, labels = 0:3)
+  rug(unique(test_data$score_tfIdf))
+  mtext("tf-Idf", side = 4, line = 1)
+   
+  plot(student_b_all,
+       trans = plogis,
+       shift = coef(student_b_all)[1],
+       se   = FALSE, 
+       #rug  = TRUE,
+       select = 2,
+       main = "",
+       ylab = "", 
+       xlab = "",
+       ylim = c(-.05,1),
+       xlim = c(-18,10),
+       yaxt = "n")
+  axis(2, at = 0:3, labels = 0:3)
+  rug(unique(test_data$score_neural))
+
+
+  plot(student_bie_all,
+       shift = coef(student_bie_all)[1],
+       trans = plogis,
+       se   = FALSE, 
+       #rug  = TRUE, 
+       select = 2,
+       main = "",
+       ylab = "", 
+       yaxt = "n",
+       xlab = "",
+       ylim = c(-.05, 1),
+       xlim = c(-18, 10))
+  axis(2, at = 0:3, labels = 0:3)
+  rug(unique(test_data$score_neural))
+  mtext("neural", side = 4, line = 1)
+   
+par(mfrow = c(1,1), mar = c(5,4,4,2))
+```
+
+
+\newpage
+```{r ir_distill_fig4, echo = FALSE, fig.height = 7.8, fig.width = 8.3, fig.align = "center", warning=FALSE}
+pseudoSmoother_bie <- function(x, model = student_bie_all) {
+  #calculate estimated group means
+  plogis((coef(model)[1] + c(0, coef(model)[-1]))[round(x) + 1])
+}
+
+dev_nocite   <- round(summary(student_bie_nocite)$dev.expl * 100)
+dev_all <- round(summary(student_bie_all)$dev.expl * 100)
+
+par(mfrow = c(3,2), mar=c(2,3,2,3), oma = c(1,1,1,1))
+    plot.function(pseudoSmoother_b, 
+      from = -.49, 
+      to   = 3.49, 
+      n    = 1001, 
+      type = "n",
+      xlim = c(-.49, 3.49),
+      ylim = c(0,1),
+      xaxt = "n",
+      yaxt = "n",
+      main = glue("Student without Citation Feature (D\U00B2={dev_nocite}%)"),
+      ylab = "", 
+      xlab = "")
+    axis(1, at = 0:3, labels = c("none", "inventor", "examiner", "family"))
+    axis(2, at = 0:3, labels = 0:3)
+    text(labels = "not included in student model",
+         x      = mean(c(-.49, 3.49)),
+         y      = mean(c(0,1)),
+         adj    = .5)
+    
+   plot.function(pseudoSmoother_bie, 
+      from = -.49, 
+      to   = 3.49, 
+      n    = 1001, 
+      lty  ="solid",
+      xlim = c(-.49, 3.49),
+      ylim = c(0,1),
+      xaxt = "n",
+      yaxt = "n",
+      main = glue("Student with Citation Feature (D\U00B2={dev_all}%)"),
+      ylab = "", 
+      xlab = "citation")
+   axis(1, at = 0:3, labels = c("none", "inventor", "examiner", "family"))
+   axis(2, at = 0:3, labels = 0:3)
+   mtext("citation", side = 4, line = 1)
+  
+  plot(student_b_all,
+       trans = plogis,
+       shift = coef(student_b_all)[1],
+       se   = FALSE, 
+       #rug  = TRUE,
+       select = 1,
+       main = "",
+       ylab = "", 
+       xlab = "",
+       ylim = c(-.05,1),
+       xlim = c(0,1),
+       yaxt = "n")
+  axis(2, at = 0:3, labels = 0:3)
+  rug(unique(test_data$score_tfIdf))
+
+  plot(student_bie_all, 
+       trans = plogis,
+       shift = coef(student_bie_all)[1],
+       se   = FALSE, 
+       #rug  = TRUE, 
+       select = 1,
+       main = "",
+       ylab = "", 
+       yaxt = "n",
+       xlab = "",
+       ylim = c(-.05, 1),
+       xlim = c(0, 1))
+  axis(2, at = 0:3, labels = 0:3)
+  rug(unique(test_data$score_tfIdf))
+  mtext("tf-Idf", side = 4, line = 1)
+   
+  plot(student_b_all,
+       trans = plogis,
+       shift = coef(student_b_all)[1],
+       se   = FALSE, 
+       #rug  = TRUE,
+       select = 2,
+       main = "",
+       ylab = "", 
+       xlab = "",
+       ylim = c(-.05,1),
+       xlim = c(-18,10),
+       yaxt = "n")
+  axis(2, at = 0:3, labels = 0:3)
+  rug(unique(test_data$score_neural))
+
+
+  plot(student_bie_all,
+       shift = coef(student_bie_all)[1],
+       trans = plogis,
+       se   = FALSE, 
+       #rug  = TRUE, 
+       select = 2,
+       main = "",
+       ylab = "", 
+       yaxt = "n",
+       xlab = "",
+       ylim = c(-.05, 1),
+       xlim = c(-18, 10))
+  axis(2, at = 0:3, labels = 0:3)
+  rug(unique(test_data$score_neural))
+  mtext("neural", side = 4, line = 1)
+   
+par(mfrow = c(1,1), mar = c(5,4,4,2))
+```
+
+
+\newpage
+## ALL PARTIAL CIRCULAR TEACHERS (BI AND BIE MODEL)
+```{r students of BI-teacher, message=FALSE, warning=FALSE, echo=FALSE}
+student_bi_all <- 
+  gam(score_bi ~ s(score_tfIdf) + s(score_neural) + cited_inventor + cited_examiner + cited_family,
+      data = test_data,
+      family = binomial)
+
+student_bi_nocite <- 
+  gam(score_bi ~ s(score_tfIdf) + s(score_neural),
+      data = test_data,
+      family = binomial)
+```
+
+
+
+```{r ir_distill_fig5, echo = FALSE, fig.height = 7.8, fig.width = 8.3, fig.align = "center", warning=FALSE}
+pseudoSmoother_bie <- function(x, model = student_bie_all) {
+  #calculate estimated group means
+  plogis((coef(model)[1] + c(0, coef(model)[-1]))[round(x) + 1])
+}
+
+pseudoSmoother_bi <- function(x, model = student_bi_all) {
+  #calculate estimated group means
+  plogis((coef(model)[1] + c(0, coef(model)[-1]))[round(x) + 1])
+}
+
+
+par(mfrow = c(3,2), mar=c(2,3,2,3), oma = c(1,1,1,1))
+    plot.function(pseudoSmoother_bi, 
+      from = -.49, 
+      to   = 3.49, 
+      n    = 1001, 
+      lty  ="solid",
+      xlim = c(-.49, 3.49),
+      ylim = c(0,1),
+      xaxt = "n",
+      yaxt = "n",
+      main = glue("Teacher with Inventor Feature (F1={round(f1_test$f1_bi, 3)})"),
+      ylab = "", 
+      xlab = "citation")
+    axis(1, at = 0:3, labels = c("none", "inventor", "examiner", "family"))
+    
+   plot.function(pseudoSmoother_bie, 
+      from = -.49, 
+      to   = 3.49, 
+      n    = 1001, 
+      lty  ="solid",
+      xlim = c(-.49, 3.49),
+      ylim = c(0,1),
+      xaxt = "n",
+      yaxt = "n",
+      main = glue("Teacher with Inventor and Examiner Feature (F1={round(f1_test$f1_bie, 3)})"),
+      ylab = "", 
+      xlab = "citation")
+   axis(1, at = 0:3, labels = c("none", "inventor", "examiner", "family"))
+   mtext("citation", side = 4, line = 1)
+  
+  plot(student_bi_all,
+       trans = plogis,
+       shift = coef(student_bi_all)[1],
+       se   = FALSE, 
+       #rug  = TRUE,
+       select = 1,
+       main = "",
+       ylab = "", 
+       xlab = "",
+       ylim = c(-.05,1),
+       xlim = c(0,1),
+       yaxt = "n")
+  axis(2, at = 0:3, labels = 0:3)
+  rug(unique(test_data$score_tfIdf))
+
+  plot(student_bie_all, 
+       trans = plogis,
+       shift = coef(student_bie_all)[1],
+       se   = FALSE, 
+       #rug  = TRUE, 
+       select = 1,
+       main = "",
+       ylab = "", 
+       yaxt = "n",
+       xlab = "",
+       ylim = c(-.05, 1),
+       xlim = c(0, 1))
+  axis(2, at = 0:3, labels = 0:3)
+  rug(unique(test_data$score_tfIdf))
+  mtext("tf-Idf", side = 4, line = 1)
+   
+  plot(student_bi_all,
+       trans = plogis,
+       shift = coef(student_bi_all)[1],
+       se   = FALSE, 
+       #rug  = TRUE,
+       select = 2,
+       main = "",
+       ylab = "", 
+       xlab = "",
+       ylim = c(-.05,1),
+       xlim = c(-18,10),
+       yaxt = "n")
+  axis(2, at = 0:3, labels = 0:3)
+  rug(unique(test_data$score_neural))
+
+
+  plot(student_bie_all,
+       shift = coef(student_bie_all)[1],
+       trans = plogis,
+       se   = FALSE, 
+       #rug  = TRUE, 
+       select = 2,
+       main = "",
+       ylab = "", 
+       yaxt = "n",
+       xlab = "",
+       ylim = c(-.05, 1),
+       xlim = c(-18, 10))
+  axis(2, at = 0:3, labels = 0:3)
+  rug(unique(test_data$score_neural))
+  mtext("neural", side = 4, line = 1)
+   
+par(mfrow = c(1,1), mar = c(5,4,4,2))
+```
