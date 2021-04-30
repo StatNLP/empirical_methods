@@ -61,7 +61,7 @@ summary(data_ter)
 ```
 
 ## A traditional way of analyzing system performance
-```{r avaerage over replicates (seed)}
+```{r average over replicates (seed)}
 #for a traditional analysis one has to average over replicates
 data_ter_mean <- 
   data_ter %>%
@@ -191,7 +191,7 @@ anova(model_ssl, lmer.df = "asymptotic")
 ```
 
 
-```{r calc group means investige interaction}
+```{r calc group means investigate interaction}
 group_means_ssl <- 
   emmeans(model_ssl, ~ system:src_length_class, lmer.df = "asymptotic")
 ```

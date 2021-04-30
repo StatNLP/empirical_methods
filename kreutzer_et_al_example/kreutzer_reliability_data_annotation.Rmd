@@ -16,11 +16,6 @@ header-includes:
   - \usepackage{amsmath}
 ---
 
-REMARK TO ME: Score should be Reward. Reward: {Human Feedback} --> RealNumber.
-Reward is used to train model not the intermediate Post edit or Marking. So we
-need to investigate the reliability of the reward to ensure replicable (annotator
-stable) training successes.
-
 ```{r, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE, 
                       cache.lazy = FALSE,
@@ -54,191 +49,8 @@ library(glue)      # A package that provides interpolated string functions.
 library(latex2exp) # A package that converts latex to plotmath expressions.
 ```
 
-# Introduction
-
-The purpose of this lecture is to provide an introduction to reliability analysis
-of measurement procedures based on generalizability theory (G-theory). Let us
-start by defining and discussing the most elementary ideas and concepts.
-
-```{definition, name="Measurement"}
-A measurement is a non-random operation that assigns a numerical value 
-to an object for the purpose of acquiring information about certain attributes or 
-characteristics of that object.
-```
-
-```{definition, name="Score"}
-The numerical value assigned to an object via a measurement is called the score
-of the object.
-```
-
-Ideally, the score is solely determined by the empirical property of the object 
-and other peculiarities of the measurement are of no significance. This means 
-that repeated measurements of the same object would yield the same scores under
-all possible conditions. Unfortunately this is rarely if ever the case. The 
-extent to which replicated measurements yields identical scores is called 
-**reliability**.
-
-```{definition, name="Reliability"}
-Reliability is a measure of the degree of consistency in scores over replications
-of a measurement procedure (scoring procedure).
-```
-
-This definition implies a number of subtleties. Firstly, reliability is not a 
-direct property of a measurement instrument but of scores obtained by this instrument 
-under various conditions. We can even go further and for instance measure
-the same object ten times and assign the average (or the mode) of this ten 
-measures as score to the object. Of course, this raises questions like, how is 
-reliability of the single measure scores related to the reliability of the 
-derived score etc. To stress this point let us introduce the convention to 
-reserve the word measurement procedure for the case where we consider only 
-scores obtained from a single  situation and **scoring procedure** for the 
-general case.
-
-Secondly, this definition makes no strict assertion about what constitutes a 
-replication. This term is left open for the researcher to be defined. This 
-doesn't mean that this choice is completely arbitrary or that you can define your 
-replications in such a way that your reliability is maximized. It stresses the point,
-that the definitory power of the researcher allows him to consider what is relevant 
-to him. To clarify this let us consider a example. Suppose that we want to create
-an NLP data set, and for this purpose you require human annotators to 
-annotate sentences. Let us further assume that this annotation is a numerical 
-value, so that we can think of this annotations as measurements in our defined 
-sense. Then you would not want your data set to be very different for different
-annotators. This is expressed by the phrase "reliable annotations" and to be precise
-you have to add "across raters". In this case raters constitute your replications.
-
-Thus, the first question one has to answer when conducting a reliability study is
-"What are the intended replications of the measurement procedure?"---Based on this 
-answer, G-Theory provides you with a frame work that tells you how to collect 
-data so that you can estimate reasonable reliability statistics for your purpose. 
-It also provides the means to consider different scoring procedures based on 
-the same measurement procedure.  
-
-To illustrate the concepts and techniques we consider an actual NLP research 
-example conducted by [Kreutzer et al.](https://arxiv.org/pdf/2004.11222.pdf) 
-(follow the link to the paper). 
-In this example the researchers wanted to improve the performance of a 
-pretrained machine translation system by incorporating human translation quality 
-judgments in an reinforcement learning mechanism. To this end they needed to 
-design a scoring procedure that allows to quantification of translation quality. 
-Kreutzer et al. have done this indirectly by letting human annotators correct 
-machine  translations. They investigated two modes of correction. The first mode
-is called "Marking". In this mode the annotators simple mark words that are 
-wrong. The second mode is called "Post Edit". In this mode the annotators 
-corrected the translations. For both modes the number of marked/changed words
-relative to the translated sentence length was used as measure of translation
-quality^[Here, higher scores correspond to lower translation quality.]. 
-
-
-In G-Theory a reliability analysis is separated in two stages. The first stage
-is called a G-study and is concerned with estimating statics necessary to 
-calculate reliability measures (not only for the measurement procedure, but also
-for a wide range of score procedures derived from it). The second stage is called
-a D-study where we use the estimates obtained in the G-study to calculate 
-and compare reliability coefficients for derived scoring procedures. 
-
 
 # G-Study
-
-As already mention the purpose of a G-study is to collect data and estimate 
-statistics that allow us to calculate reliability measures. For this purpose 
-we introduce several concepts to facilitate this analysis:
-
-```{definition, name="Population"}
-The population is the set of all objects that are eligible to be measured.
-```
-
-In our example the population are all translated sentences in the corpus, where 
-the hypothesis generated by the machine translation system (MTS) differs from the 
-gold standard translation
-
-```{definition, name="Facet"}
-A facet is a set of similar conditions of measurement that might 
-influence the obtained score.
-```
-
-In essence facets are constituents of replications that you want to consider. 
-In a typical NLP setting that uses human annotators, annotators would be a 
-facet. If you are concerned, that annotators would also annotate the same 
-sentence differently when they annotate this sentence several times, you should 
-also include a facet for instantiations. Those were also the facets that Kreutzer et 
-al. considered. 
-
-```{definition, name="Universe of Admissible Observations"}
-The universe of admissible observations is the subset of the Cartesian product of 
-the population and all facets for which a score could be otained.
-```
-
-Thus the universe of admissible observations are single measurements taken 
-for any combination of sentence (p), rater (r) and instantiation (o). In G-theory 
-this is formally written as $p \times r \times o$. Such a structure is called 
-**fully crossed**.
-
-We can think of this universe as an array with three indices (of finite or 
-countable length). Every cell of this array contains a single fixed numerical 
-value, which is the score for the measurement obtained under the condition 
-combination described by the index values. In our example, the quality score of 
-the machine translation obtained for a specific sentence, rater and instantiation. 
-In this model measurement means to select a cell. For a fixed population
-index p---in our case a specific sentence---the average over all cell values with
-this index defines its **expectation** $\mu_p$. The average over all $\mu_p$ is 
-called the **grand mean** who is denoted by $\mu$. The average quadratic deviation 
-between $\mu_p$ and $\mu$ is called the **variance component** of the population and 
-is denoted by $\sigma^2_p$ or $\sigma^2 \left( p \right)$ and represents the 
-amount of variation in the scores that can be attributed to the differences 
-between the objects of measure. In an analogous way expectations and variance 
-components can be defined for facets too. 
-Based on these definitions it is possibly to formulate a random effects model
-that allows to decompose the **total variance** 
-(that is the average quadratic deviation of all cell values from the grand mean) 
-into
-
-$$ \sigma^2 \left( X_{pro} -  \mu \right) = 
-      \underbrace{
-        \sigma^2 \left( p          \right)}_{\mathrm{substantial\ variance}} +
-      \underbrace{
-        \sigma^2 \left( r        \right) +
-        \sigma^2 \left( o        \right) +
-        \sigma^2 \left( pr       \right) +
-        \sigma^2 \left( po       \right) +
-        \sigma^2 \left( ro       \right) +
-        \sigma^2 \left( residual \right)}_{\mathrm{nonsubstantial\ variance}} $$
-
-where $xy$^[In the R formula syntax an interaction between $x$ and $y$ is 
-denoted by $x:y$ which in G-theory denotes that $y$ is nested on $y$. When $x$ or$y$ is more  than one character long, we will write $x,y$ to denote the interaction.]
-denotes the interaction between facet $x$ and $y$. These variance comments can be 
-divided into two groups describing variance due to differences of the measurement
-objects ($\sigma^2 \left( p \right)$) and variance due to arbitrary measurement 
-condition (all other variance components). Such a split allows
-the definition of intraclass correlation coefficients (ICC)^[A ICC is a measure of
-similarity between values within a group. In our setting a group is constituted 
-by the measures obtained for the same measurement object. The general form of an 
-ICC is a ratio of variance components, typically in a form like 
-$$ ICC \coloneqq 
-    \frac{
-      \sigma^2 \left( \mathrm{substantial\ variance} \right)
-     }
-     {
-      \sigma^2 \left( \mathrm{substantial\ variance}    \right) + 
-      \sigma^2 \left( \mathrm{nonsubstantial\ variance} \right)}$$.] which can 
-be used to define reliability measures (see next section).
-
-In order estimate the variance components, a researcher has to collect a sample 
-from the universe of admissible scores. The best way to do this is to randomly 
-select a finite subset of sentences, raters and instantiation independently and 
-observe the scores for all possible combinations. Such a data collection scheme 
-is called a **fully crossed design**^[In this case both the universe of 
-admissible measurements as well as the G-study design are fully crossed. But be 
-aware that this is just accidental, and that both concepts are indeed logically 
-separated.] 
-
-In our example, Kreutzer et al. implemented the following design: They choose
-five exemplary sentences and ten raters, who rated those sentences three times.
-This procedure was done for markings and (with different sentences) for 
-post edit based quality judgments. 
-
-The collected data is stored in the file "gStudy_kreutzer-19052020.rds".
-
 ```{r read g-study data}
 gData <- 
   readRDS("data/data_annotation.rds") %>%
@@ -247,8 +59,6 @@ gData <-
 str(gData)
 ```
 
-A plot of the data gives us a more detailed picture and provides as with a first 
-impression.
 
 ```{r kreutzer_rel_anno_fig1, warning=FALSE, echo=FALSE, fig.height = 11.7, fig.width = 8.3, fig.align = "center"}
 ggplot(data = gData, 
@@ -266,16 +76,8 @@ ggplot(data = gData,
   geom_line()
 ```
 
-We can clearly see that sentences consistently receive a higher score for the 
-post edit based quality score than for the marking based evaluation. We also see that
-the assigned scores vary more for post edit based judgments. 
 
-In line with Jiang (2018) we formulate the random effects model  to decompose 
-the variance as a linear mixed model. In order to summarize this models similar 
-to Table 2 in Jiang (2018) we define a function **summaryG** which modifies the 
-output of the build-in function **VarCorr**.
-
-```{r sumarize G_Study}
+```{r summarize G_Study}
 summaryG <- function(model) {
 
   as_tibble(VarCorr(model)) %>%
@@ -287,11 +89,6 @@ summaryG <- function(model) {
 }  
 ```
 
-Let us start, with the analysis for marking based quality judgments. Like Jiang 
-(2018) we specify a model for all main effects (sentence, rater and instantiation) and
-all two-fold interactions. We use the **subset** parameter of the **lmer** function
-to define a condition that allows us to filter only those rows in the data set
-that record observations of marking based quality judgments.
 
 ```{r Analyse G-study for MA, warning=FALSE, message=FALSE}
 gModel_ma <- 
@@ -311,27 +108,6 @@ gResults_ma <- summaryG(gModel_ma)
 gResults_ma
 ```
 
-The first result that strikes the eye is the very low percentage of systematic 
-score variation due to different sentences. Only $`r gResults_ma[["percent"]][5]`$% 
-can be attributed to differences in sentences. Thus
-$`r 100 - gResults_ma[["percent"]][5]`$% are attributed to arbitrary 
-particularities of the measurement. 
-Obviously, there is no systematic difference between repeated measurements (all 
-the variance components of the effects containing the instantiation facet are zero). 
-We also see that a significant fraction 
-($\hat\sigma^2 \left( rater \right) = `r gResults_ma[["percent"]][4]`$%) of 
-measurement variation can be attributed to different "marking styles" of raters,
-but this style differences are not uniform across sentences (
-$\hat\sigma^2 \left( rater,sentence \right) = `r gResults_ma[["percent"]][1]`$%). 
-What is really worrisome is the really large amount of non-attributable variation 
-$\hat\sigma^2 \left( residual \right) =`r gResults_ma[["percent"]][7]`$%. 
-This fact raises severe difficulties on our effort 
-to construct a sufficiently reliable scoring procedure based on marking derived 
-quality judgments.   
-
-Now, let us turn to post edit based quality judgments. For this we just have to 
-modify the specification of the subset parameter so that we select the post edit
-based quality judgments from the data set.
 
 ```{r Analysis G-study for PE, warning=FALSE, message=FALSE}
 gModel_pe <-
@@ -350,143 +126,8 @@ gResults_pe <- summaryG(gModel_pe)
 gResults_pe
 ```
 
-The results for post edited based quality judgments are much more delightful than
-the one for markings. We see that by far the largest portion of variance can be
-attributed to differences in our object of measurement 
-$\hat\sigma^2 \left( sentence \right) =`r gResults_pe[["percent"]][5]`$%. We also 
-see that the nonsubstantial fraction of variance is essentially composed of two components.
-Namely, $\hat\sigma^2 \left( rater,sentence \right) =`r gResults_pe[["percent"]][1]`$% 
-and $\hat\sigma^2 \left( residual \right) =`r gResults_pe[["percent"]][7]`$%, 
-where the former is significantly larger than the latter. The magnitude of 
-$\hat\sigma^2 \left( residual \right)$ is also quite low, so that we could be 
-hopeful to easily design a reliable scoring procedure. 
-
-Now, that we have decomposed the total variance into the individual effect 
-contributions and estimated them we have finished the G-study. In the next 
-step---called a  D-study---we are going to calculate different G-coefficients for 
-different scoring systems with the aim in mind to design a reliable method to 
-obtain quality judgments. 
-
 
 # D-Study
-
-A scenario in a D-study describes a scoring procedure and classifies the 
-facets in those that should be kept constant along repetitions and those that 
-vary. The former class of facets is called **fixed** and the latter **random**.
-These specification culminate in a so called **universe of generalization**. It 
-plays a similar role as the universe of admissible observations in describing the 
-space where obtaining scores can be thought of as selecting a cell in an array. 
-But whereas the universe of admissible observations describes the collection of all 
-possible scores that could be obtained for a single sentence from a single annotator
-on a single instantiation, the universe of generalization describes all the scores 
-that could be obtained by the scoring procedure considered for deployment and the 
-(random) facets along which generalization for this procedure is intended. Let 
-us assume that instead of obtaining the score of a sentence just from a single 
-rater we haveeach sentence evaluate by five raters and assign the average of this five 
-ratings as score to the sentence. Then the "rater" facet in our universe
-would be the set of all possible subsets of five raters. In G-theory this aspect
-is denoted by using capital letters of the corresponding facet in the 
-description of the universe of generalization. Hence, our universe of 
-generalization is formally described by $p \times R \times o$ instead
-is $p \times r \times o$ (which would mean that we only consider single 
-rater scores). 
-
-
-In the same way that we were able to decompose the total variance into variance 
-components in the universe of admissible observations, we are able to decompose
-the total variance in the universe of generalization. Indeed a lot of theoretical
-afford in G-theory is devoted to explore the relation between variance components
-for the universe of generalization and those from universe of admissible scores. It is shown
-that whenever the universe of admissible observations has a fully crossed structure
-any variance components for the universe of generalization can be expressed in 
-terms of the former for any possible structure of the universe of generalization.
-This fact allows us to consider and compare any scoring scheme that is feasible
-for us and implement the one in our application that has a satisfying reliability.
-
-Like in a G-study we need to separated the design used to obtain observations
-from the structure of the universe of generalization. To illustrate this necessity,
-consider the actual scoring procedure implemented by Kreutzer et al. They 
-structured the scoring process in such a way that a sentences was rated by 
-one and only one rater. Such a structure is called **nested** (here sentences 
-are nested in raters). Superficially it seems to remove any rater induced 
-ambiguity in the scores, because we have only one rater scoring a sentence. But 
-as long as the user-sentence pairing is in principle random, the universe of 
-generalization has a fully crossed structure, because any rater sentence pair is 
-possible (it's probability is larger than zero). Thus the universe of 
-generalization has a fully crossed structure and not a nested one as a first 
-impression might suggest.
-
-The structure of universe of generalization plays a crucial role in clarifying 
-what constitutes a replication and thus gives the notion of reliability a 
-concrete meaning. This is done by specifying fixed and random facets. Fixing a
-facet means that we keep the condition it describes constant along all possible
-measures. Fixing a facets should only be done, when we are not interest in generalizing---
-considering scores obtained under all possible conditions of this facet---over it.   
-For example, when we fix ten annotators we are only interested in making a 
-statement for ten raters and not about all other possible raters. 
-Such an operation typically increases the reliability (because it reduces the 
-possible replications) but narrows the scope of generalization. In the extreme 
-case, we can narrow the scope just to the conditions we have observed. This 
-means that we fix all facets. This is the setting where a lot of agreement 
-measures like Krippendorf's alpha are located. We can see, that in such a setting 
-reliability is not associated with generalization above the given data anymore.
-It merely describes how similar the observed ratings are.  Actually, this is not 
-a scenario considered in a D-study. So we require that at least one facet of the
-universe of generalization is random.
-
-
-Let us proceed with our example and conduct a D-study assuming that we are 
-interested in constructing a scoring procedure which assigns scores that are
-sufficiently stable across raters and instantiations. Therefore we have to make some 
-design choices to express this:
-
-1. Rater and instantiations are random facets in our universe of generalization.
-2. Any combination of rater, facet and instantiation is possible.
-
-Further we assume that it is feasible for us to collect repeated measurements of 
-the same sentence for at most $R=12$ raters and $O=5$ instantiations and that the 
-score that we assign to the sentence is the average score of those repeated 
-measurements.
- 
-Now that we have set the conditions for our scenario, we need to talk about 
-reliability measures. The two most commonly encountered measures^[In fact there 
-are other measures, e.g signal-to-noise ratios that could be defined through 
-variance components.] are called the **generalizability coefficient** (also called 
-relative error G-coefficient) abbreviated by $\mathbb{E} \left( \rho^2 \right)$
-and  the **index of dependability** (called absolute error G-coefficient) 
-symbolized by $\varphi_{abs}$. For the universes of generalization that we would like
-to consider the generalizability coefficient can be calculated by
-$$ \varphi_{rel} \coloneqq  
-      \frac{ 
-        \sigma^2 \left( p \right)}{
-        \sigma^2 \left( p \right) + \sigma^2_\delta} $$
-where 
-$$\sigma^2_\delta \coloneqq 
-    \frac{\sigma^2 \left( pr      \right)}{n_{rater}} + 
-    \frac{\sigma^2 \left( po      \right)}{n_{instantiation}} + 
-    \frac{\sigma^2 \left( residual \right)}{n_{rater}n_{instantiation}} $$
-and the index of dependability can be calculated by
-$$ \varphi_{abs} \coloneqq  
-      \frac{ 
-        \sigma^2 \left( p \right)}{
-        \sigma^2 \left( p \right) + \sigma^2_\Delta} $$
-where 
-$$\sigma^2_\Delta \coloneqq 
-    \frac{\sigma^2 \left( r        \right)}{n_{rater}} + 
-    \frac{\sigma^2 \left( o        \right)}{n_{instantiation}} + 
-    \frac{\sigma^2 \left( pr      \right)}{n_{rater}} + 
-    \frac{\sigma^2 \left( po      \right)}{n_{instantiation}} + 
-    \frac{\sigma^2 \left( residual \right)}{n_{rater}n_{instantiation}}. $$
-It is worthwhile to remark that all the variance components in the formulas are 
-from the universe of admissible observations, despite the fact that both
-coefficients belong the the universe of generalization. For a detailed derivation
-of this formulas see Brennan (2001)^[In this book Brennan also shows how to 
-calculate both coefficients for any structured universe of generalization.]. 
-One should also note the ICC like structure of both coefficients.
-
-Both coefficients are implemented in the following functions. See the output
-of gResult_ma or gResult_pe to follow the indexing of the vectors.
-
 ```{r function: Relative and Absolute Reliability Coefficient}
 G_rel <- function(n_raters, n_instantiations, gResult) {
   sigma_p <- gResult$variance[5] #sentence 
@@ -513,9 +154,6 @@ G_abs <- function(n_raters, n_instantiations, gResult) {
 }
 ```
 
-The following code block implements the evaluation of both reliability measures
-for all combinations of $R = 1,...,15$ and $O = 1,2,...,5$ for marking and 
-post edit based quality judgments.
 
 ```{r conduct D-study}
 R <- 12
@@ -568,10 +206,6 @@ levels(dStudy$mode) <-
     TeX("Post Edit"))
 ```
 
-In order to draw conclusions we plot the results of our D-study. Let us assume
-that we want to reach at least a value of $.8$ for both coefficients^[This value 
-is a convention in a lot of scientific communities to characterize reliable 
-scores.]. 
 
 ```{r kreutzer_rel_anno_fig2, warning=FALSE, echo=FALSE, fig.height = 5.85, fig.width = 8.3, fig.align = "center"}
 ggplot(dStudy, 
@@ -595,46 +229,9 @@ ggplot(dStudy,
   
 ```
 
-We can see, that for markings the averaged quality judgment will not be 
-sufficiently reliable for both coefficients, expect if the number of raters and 
-instantiations is further increased. Whereas the
-average over three raters on one instantiation is sufficient for post edit based 
-quality judgment to exceed the value of $.8$ for both coefficients. In summary
-we see that for post edit based quality judgments a scoring procedure that 
-assigns the average over three ratings obtained from different raters as score 
-to a sentence is sufficiently reliable. Within our feasibility bounds we can not
-design such a procedure for marking based quality judgments.
-
-
 ##  Commonly Used Coefficients to Characterize Agreement 
 
-We can also use the tool box of G-theory to calculate more widely known
-reliability measures when raters are involved in the scoring process. Because 
-all of them can be expressed as the generalizability coefficients of an 
-appropriately designed universe of generalization. The following examples should
-illustrate the use and consequences of fixing a facet.
-
 ### Intra-rater Reliability
-
-The first reliability coefficient we want to consider is the **stability** 
-for ratings obtained from $n_ {rater}$ rater.
-
-```{definition, name="Stability"}
-Stability is defined as the expected intra class correlation of scores obtained 
-by the same $n_{rater}$ raters on two different instantiations.
-```
-
-When $n_{rater} = 1$ stability can also be regarded as 
-**intra-rater reliability**. In order to calculate this coefficient within the 
-framework of G-theory, we need to design an appropriate universe of 
-generalization. Obviously, we need to fix the rater facet because we want to 
-consider just one rater and generalize over the instantiation facet 
-(without averaging). In this universe the generalizability coefficient can be 
-interpreted as a measure of stability.
-
-The following function implements this coefficient (see again Brennan (2001)
-for the mathematical details).
-
 ```{r stability}
 stability <- function(gResult, n_rater = 1) {
  
@@ -650,26 +247,8 @@ stability <- function(gResult, n_rater = 1) {
 }
 ```
 
-When we apply this function to the estimates obtained in the G-studies, we yield
-a very satisfying intra-rater reliability of `r stability(gResults_pe)` for post 
-edit based quality judgments, and disappointingly low value of 
-`r stability(gResults_ma)` for marking based judgments.
-
 
 ### Inter-rater Reliability
-
-Then next commonly encountered reliability statistic measures the agreement
-between raters and is called **inter-rater reliability**.
-
-```{definition, name="Standardized Interrater Reliabilty"}
-The standardized interrater reliabilty is the expected intra class correlation 
-between the scores assigned by two raters on the same instantiation.
-```
-
-In the same spirit as for intra-rater reliability we define a proper universe 
-of generalization. But this time we fix the instantiation facet and generalize over
-the rater facet without averaging.
-
 ```{r standardized interrater agreement}
 stdInterrater <- function(gResult) {
  
@@ -684,30 +263,3 @@ stdInterrater <- function(gResult) {
   return(round(numerator / (numerator + denumerator), 3)) 
 }
 ```
-
-When we apply this function to the estimates obtained in the G-studies, we yield
-a mediocre to poor results for both kind of quality judgments.
-For post edit based judgments the inter-rater reliability is 
-`r stdInterrater(gResults_pe)` and for marking based quality judgments the 
-inter-rater reliability is `r stdInterrater(gResults_ma)`. 
-
-
-# Summary
-We have seen that G-theory provides a flexible conceptual frame that allows to reason 
-about judgments where human raters disagree and a correct judgment doesn't exists.
-We have also seen, that even when traditional measures like inter- or intra-rater
-reliability suggest a devastating conclusion, G-theory shows a way to improve 
-the reliability of measurement procedures and allows to quantify this gain. 
-A conceptual strong point of G-theory is the conceptualization of measurement error,
-as variability between replicated measurements. This is especially interesting
-for machine learning, where replicable training successes demand replicable feed back
-designs.
-
-# Further reading
-
-I highly recommend chapter 1 of "Generalizability Theory" by Brennan to get
-a general overview and chapter 3 and 4 if you are interested in the mathematical 
-background. A more conceptually focused read is "An Essay on the History and 
-Future of Reliability from the Perspective of Replications" also by Brennan.
-If you are interested in the statistical roots of ICCs than R.A Fisher's
-"Statistical Methods for Research Workers" is a must read for you.
