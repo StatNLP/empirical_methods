@@ -371,7 +371,7 @@ ICC(var_decomp_partial)
 
 ### full grid
 ```{r quick check: full grid, warning=FALSE, include=TRUE, cache=TRUE}
-var_decomp_partial <- 
+var_decomp_full <-
   lmer(ter ~ 
         (1 | sentence_id),
        data = data_hyperPar_full,
@@ -380,5 +380,5 @@ var_decomp_partial <-
 
 
 ```{r ICC for quick check on full grid}
-ICC(var_decomp_partial)
+ICC(var_decomp_full)
 ```

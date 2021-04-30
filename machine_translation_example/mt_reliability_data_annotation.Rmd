@@ -77,7 +77,7 @@ ggplot(data = gData,
 ```
 
 
-```{r sumarize G_Study}
+```{r summarize G_Study}
 summaryG <- function(model) {
 
   as_tibble(VarCorr(model)) %>%
