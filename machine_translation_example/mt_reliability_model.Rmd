@@ -1,5 +1,5 @@
 ---
-title: 'Hyperparameter Grid Search'
+title: ''
 author: 
   - Michael Hagmann^[hagmann@cl.uni-heidelberg.de]
   - Stefan Riezler
