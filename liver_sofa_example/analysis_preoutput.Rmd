@@ -1,5 +1,5 @@
 ---
-title: 'Detecting Circularity with GAMs: An Exercise in R'
+title: ''
 author: 
   - Michael Hagmann ^[hagmann@cl.uni-heidelberg.de]
   - Stefan Riezler
