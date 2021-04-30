@@ -65,7 +65,7 @@ powerSet <- function(set) {
 
 
 ```{r read data sets, include=FALSE}
-train_data <- readRDS("data/dataset-train_nostd.rds")
+train_data <- readRDS("data/dataset-training_nostd.rds")
 ```
 
 
