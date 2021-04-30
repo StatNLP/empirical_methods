@@ -208,7 +208,7 @@ print(f1_train)
 ## F1 on test data
 ```{r read test set , include=FALSE}
 test_data <- 
-  readRDS("ir_testset.rds") %>%
+  readRDS("data/ir_testset.rds") %>%
     mutate(relevance_dicho  = as.numeric(relevance != 0),
            cited_inventor_num = as.numeric(cited_inventor) - 1,
            cited_examiner_num = as.numeric(cited_examiner) - 1,

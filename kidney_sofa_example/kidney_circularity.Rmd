@@ -427,7 +427,7 @@ selected_model_2dim <- gam(target ~ s(crea, urine24, k=600), data=train_data)
 
 
 ```{r try to build 3d surface, include = FALSE, eval=FALSE}
-library(plot3D)
+#library(plot3D)
 
-surf3D()
+#surf3D()
 ```

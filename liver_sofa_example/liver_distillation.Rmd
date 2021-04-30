@@ -74,9 +74,9 @@ class_accuracy <-
 
 
 ```{r read data sets, include=FALSE}
-train_data <- readRDS("train_set_with_sofa_predictions.rds")
+train_data <- readRDS("data/train_set_with_sofa_predictions.rds")
 
-test_data <- readRDS("test_set_with_sofa_predictions.rds")
+test_data <- readRDS("data/test_set_with_sofa_predictions.rds")
 ```
 
 
@@ -471,7 +471,7 @@ par(mfrow = c(1,1), mar = c(5,4,4,2))
 \newpage
 ## ABLATION STUDY I (REMOVE CIRCULAR FEATURE)
 ```{r ablation data set, include=FALSE}
-ablation_data <- readRDS("ablation_set_with_sofa_predictions.rds")
+ablation_data <- readRDS("data/ablation_set_with_sofa_predictions.rds")
 ```
 
 

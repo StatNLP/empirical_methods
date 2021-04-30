@@ -1,5 +1,5 @@
 ---
-title: 'Using LMEMs to Analyse Model Performance Beyond Mean Measures'
+title: 'Hyperparameter Grid Search'
 author: 
   - Michael Hagmann^[hagmann@cl.uni-heidelberg.de]
   - Stefan Riezler
@@ -49,7 +49,8 @@ library(glue)      # A package that provides interpolated string functions.
 library(latex2exp) # A package that converts latex to plotmath expressions.library(lmerTest)
 library(lmerTest)  # A package that improves inference for LMEM.
 library(emmeans)   # A package that allows to conduct post-hoc tests.
-library(parameters)    # A package that 
+library(parameters)    # A package that
+library(optimx)
 ```
 
 # Assessing and Quantifing Hyperparameter Influence
@@ -112,7 +113,7 @@ conduct hyperparameter analysis.
 ## Hyperparameter as Fixed Effect: Reward Weights
 
 In this section we are interested in a detailed analysis of the effect of 
-different delta weights incorported in the loss function. For this purpose we 
+different delta weights incorporated in the loss function. For this purpose we
 regard the variable "delta_scheme" as a fixed effects variable. 
 This allows us to estimate the corresponding group means and conduct inference 
 similar to what w we have seen in the previous sections.
@@ -503,7 +504,7 @@ data_hyperPar_full <-
 ```{r show full grid, include=FALSE, eval=FALSE}
 data_hyperPar_full %>%
   select(-ter, -sentence_id, -src_length_class) %>%
-  group_by(across()) %>
+  group_by(across())
 ```
 
 

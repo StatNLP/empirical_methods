@@ -113,7 +113,7 @@ ICC_nested <- function(model) {
 
 ```{r read data, echo = FALSE}
 grid_data <- 
-  readRDS("reliability_gridsearch_results.rds")
+  readRDS("data/reliability_gridsearch_results.rds")
 ```
 
 TASK: Predict SOFA Score for liver based on training data without circular features.
