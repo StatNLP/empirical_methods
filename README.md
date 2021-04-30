@@ -1,6 +1,6 @@
-# supplementary materials for the book empirical methods
+# Supplementary materials for the book "Validity, Reliability, and Significance. Empirical methods for NLP and Data Science"
 
-This repository contains supplementary materials for the book [Validity, Reliability, and Significance: Model-Based Empirical Methods for NLP](https://www.cl.uni-heidelberg.de/statnlpgroup/empirical_methods/)
+Supplementary materials for the book ["Validity, Reliability, and Significance. Empirical Methods for NLP and Data Science"](https://www.cl.uni-heidelberg.de/statnlpgroup/empirical_methods/)
 
 ## examples
 1. IR example
