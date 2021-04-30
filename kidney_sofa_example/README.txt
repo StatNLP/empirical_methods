@@ -1,7 +1,7 @@
 This directory contains all files need to rerun the analyses related to the 
 kidney (renal) sofa example presented in the book.
 
-The most important files are the two R Markdown files (we recommed using RStudio
+The most important files are the two R Markdown files (we recommend using RStudio
 to open them):
 [1] kidney_circularity.Rmd
 [2] kidney_distill.Rmd
@@ -25,4 +25,4 @@ which are used for analysis.
 
 REMARK: If you knit the Rmd files you will obtain a pdf with the same name as
 the script along with the figures in png,svg and pdf stored in figures/. The
-computationally more expansiv sections are chached in *_cache/ directories.
+computationally more expensive sections are cached in *_cache/ directories.
