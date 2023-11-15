@@ -2,8 +2,10 @@
 
 
 ## Examples
-1. IR
-2. Machine translation
-3. Kidney SOFA
-4. Liver SOFA
-5. Large Language Model (Inferential Reproducibility) [python]
+1. IR [R]
+2. Machine translation [R]
+3. Kidney SOFA [R]
+4. Liver SOFA [R]
+5. Inferential Reproducibility [python]
+  - Large Language Model Example
+  - Machine Translation Example
